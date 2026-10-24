@@ -7,6 +7,7 @@ A security-first backend foundation for wearable secure-element provisioning. Th
 - Go 1.22 HTTP API using the standard library
 - Explicit provisioning state machine
 - Idempotent session creation with Supabase PostgreSQL persistence when `DATABASE_URL` is configured, plus an in-memory fallback for local development
+- Slice 3 attestation orchestration with one-time challenges, request binding, replay protection, and counter checks
 - Mock Crypto/HSM and Interswitch adapters; **no real payment or key operations**
 - Health and readiness endpoints
 - PostgreSQL schema for the production persistence boundary
@@ -36,10 +37,10 @@ The mobile app must never receive manufacturer master keys, HSM credentials, raw
 
 ## Next implementation slices
 
-1. PostgreSQL repositories and migrations runner
-2. OAuth/OIDC authentication and app/device attestation
-3. Real device registry and lifecycle controls
-4. HSM-backed Crypto Service over mTLS
-5. Interswitch sandbox adapter with signed webhooks
-6. Hardware-in-the-loop APDU contract tests
-7. Production deployment and audit export
+1. OAuth/OIDC authentication and app/device identity integration
+2. Apple App Attest verifier with production certificate fixtures
+3. Android Play Integrity verifier with Google Cloud configuration
+4. Real device registry and lifecycle controls
+5. HSM-backed Crypto Service over mTLS
+6. Interswitch sandbox adapter with signed webhooks
+7. Hardware-in-the-loop APDU contract tests

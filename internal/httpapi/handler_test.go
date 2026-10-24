@@ -14,7 +14,7 @@ import (
 
 func TestRoutes(t *testing.T) {
 	log := slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil))
-	h := New(log, service.New(memory.NewSessionRepository(), mock.CryptoService{}, mock.InterswitchAdapter{}, nil), 1<<20)
+	h := New(log, service.New(memory.NewSessionRepository(), mock.CryptoService{}, mock.InterswitchAdapter{}, nil), nil, 1<<20)
 	ts := httptest.NewServer(h.Routes())
 	defer ts.Close()
 	resp, err := http.Get(ts.URL + "/healthz")

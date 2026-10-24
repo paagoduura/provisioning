@@ -11,17 +11,19 @@ import (
 	"time"
 
 	"github.com/paagoduura/provisioning/internal/adapters/memory"
+	"github.com/paagoduura/provisioning/internal/attestation"
 	"github.com/paagoduura/provisioning/internal/service"
 )
 
 type Handler struct {
 	log          *slog.Logger
 	provisioning *service.Service
+	attestation  *attestation.Service
 	maxBodyBytes int64
 }
 
-func New(log *slog.Logger, provisioning *service.Service, maxBodyBytes int64) *Handler {
-	return &Handler{log: log, provisioning: provisioning, maxBodyBytes: maxBodyBytes}
+func New(log *slog.Logger, provisioning *service.Service, attestationService *attestation.Service, maxBodyBytes int64) *Handler {
+	return &Handler{log: log, provisioning: provisioning, attestation: attestationService, maxBodyBytes: maxBodyBytes}
 }
 
 func (h *Handler) Routes() http.Handler {
@@ -30,6 +32,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /readyz", h.ready)
 	mux.HandleFunc("POST /v1/provisioning-sessions", h.createSession)
 	mux.HandleFunc("GET /v1/provisioning-sessions/", h.getSession)
+	mux.HandleFunc("POST /v1/provisioning-sessions/", h.sessionAction)
 	return requestID(securityHeaders(maxBody(h.maxBodyBytes, logging(h.log, mux))))
 }
 
@@ -69,6 +72,79 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusOK
 	}
 	writeJSON(w, status, result)
+}
+
+type challengeRequest struct {
+	RequestHash string `json:"request_hash"`
+}
+type challengeResponse struct {
+	ID        string    `json:"id"`
+	Challenge string    `json:"challenge"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/v1/provisioning-sessions/")
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) != 2 || parts[0] == "" {
+		writeError(w, http.StatusBadRequest, "session action is required")
+		return
+	}
+	sessionID, action := parts[0], parts[1]
+	switch action {
+	case "device-discovery":
+		result, err := h.provisioning.Discover(r.Context(), sessionID)
+		if err != nil {
+			writeDomainError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	case "attestation-challenges":
+		if h.attestation == nil {
+			writeError(w, http.StatusServiceUnavailable, "attestation service unavailable")
+			return
+		}
+		var req challengeRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		result, err := h.attestation.IssueChallenge(r.Context(), sessionID, req.RequestHash)
+		if err != nil {
+			writeDomainError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, challengeResponse{ID: result.ID, Challenge: result.Value, ExpiresAt: result.ExpiresAt})
+	case "attestation":
+		if h.attestation == nil {
+			writeError(w, http.StatusServiceUnavailable, "attestation service unavailable")
+			return
+		}
+		var req attestation.Submission
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		result, err := h.attestation.Verify(r.Context(), sessionID, req)
+		if err != nil {
+			writeDomainError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	default:
+		writeError(w, http.StatusNotFound, "unknown session action")
+	}
+}
+
+func writeDomainError(w http.ResponseWriter, err error) {
+	status := http.StatusBadRequest
+	if errors.Is(err, attestation.ErrUnsupportedProvider) {
+		status = http.StatusNotImplemented
+	}
+	if errors.Is(err, memory.ErrNotFound) || errors.Is(err, attestation.ErrChallengeNotFound) {
+		status = http.StatusNotFound
+	}
+	writeError(w, status, err.Error())
 }
 
 func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {

@@ -13,6 +13,7 @@ import (
 	"github.com/paagoduura/provisioning/internal/adapters/memory"
 	"github.com/paagoduura/provisioning/internal/adapters/mock"
 	postgresadapter "github.com/paagoduura/provisioning/internal/adapters/postgres"
+	"github.com/paagoduura/provisioning/internal/attestation"
 	"github.com/paagoduura/provisioning/internal/audit"
 	"github.com/paagoduura/provisioning/internal/config"
 	httpapi "github.com/paagoduura/provisioning/internal/httpapi"
@@ -28,6 +29,8 @@ func main() {
 	}
 	var repo service.Repository
 	var auditSink service.AuditPort
+	var attestationRepo attestation.ChallengeRepository
+	var attestationRecords attestation.AttestationRecordRepository
 	var pool *pgxpool.Pool
 	if cfg.DatabaseURL != "" {
 		pool, err = pgxpool.New(context.Background(), cfg.DatabaseURL)
@@ -46,14 +49,20 @@ func main() {
 		defer pool.Close()
 		repo = postgresadapter.NewSessionRepository(pool)
 		auditSink = postgresadapter.NewAuditSink(pool)
+		attestationRepo = postgresadapter.NewAttestationRepository(pool)
+		attestationRecords = postgresadapter.NewAttestationRepository(pool)
 		log.Info("persistence_selected", "provider", "supabase_postgres")
 	} else {
 		repo = memory.NewSessionRepository()
 		auditSink = audit.NewMemorySink()
+		memoryAttestation := memory.NewAttestationRepository()
+		attestationRepo = memoryAttestation
+		attestationRecords = memoryAttestation
 		log.Warn("persistence_selected", "provider", "memory", "warning", "development_only")
 	}
 	provisioning := service.New(repo, mock.CryptoService{}, mock.InterswitchAdapter{}, auditSink)
-	server := &http.Server{Addr: cfg.HTTPAddr, Handler: httpapi.New(log, provisioning, cfg.MaxRequestBodyBytes).Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+	attestationService := attestation.New(attestationRepo, attestationRecords, attestation.UnavailableVerifier{}, provisioning, auditSink)
+	server := &http.Server{Addr: cfg.HTTPAddr, Handler: httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes).Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go func() {

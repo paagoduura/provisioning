@@ -89,6 +89,10 @@ func (s *Service) Discover(ctx context.Context, id string) (domain.ProvisioningS
 	return s.transition(ctx, id, domain.StateDeviceDiscovered)
 }
 
+func (s *Service) TransitionToAttested(ctx context.Context, id string) (domain.ProvisioningSession, error) {
+	return s.transition(ctx, id, domain.StateDeviceAttested)
+}
+
 func (s *Service) Attest(ctx context.Context, id, deviceResponse string) (domain.ProvisioningSession, error) {
 	current, err := s.repo.Get(ctx, id)
 	if err != nil {
