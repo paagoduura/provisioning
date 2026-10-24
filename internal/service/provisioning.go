@@ -14,6 +14,7 @@ import (
 )
 
 type Repository interface {
+	Create(context.Context, domain.ProvisioningSession) (domain.ProvisioningSession, bool, error)
 	Get(context.Context, string) (domain.ProvisioningSession, error)
 	Save(context.Context, domain.ProvisioningSession) error
 	FindByIdempotencyKey(context.Context, string) (domain.ProvisioningSession, error)
@@ -56,9 +57,6 @@ func (s *Service) Create(ctx context.Context, input CreateInput, idempotencyKey 
 	if idempotencyKey == "" {
 		return domain.ProvisioningSession{}, false, errors.New("idempotency key is required")
 	}
-	if existing, err := s.repo.FindByIdempotencyKey(ctx, idempotencyKey); err == nil {
-		return existing, true, nil
-	}
 	if input.UserID == "" || input.DeviceUID == "" || input.DeviceModel == "" || input.Transport == "" {
 		return domain.ProvisioningSession{}, false, errors.New("user_id, device_uid, device_model and transport are required")
 	}
@@ -74,11 +72,12 @@ func (s *Service) Create(ctx context.Context, input CreateInput, idempotencyKey 
 	}
 	now := s.now()
 	result := domain.ProvisioningSession{ID: id, IdempotencyKey: idempotencyKey, UserID: input.UserID, DeviceUID: input.DeviceUID, DeviceModel: input.DeviceModel, Transport: input.Transport, State: domain.StateCreated, Correlation: id, CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute)}
-	if err := s.repo.Save(ctx, result); err != nil {
+	stored, created, err := s.repo.Create(ctx, result)
+	if err != nil {
 		return domain.ProvisioningSession{}, false, err
 	}
-	if err := s.repo.SaveIdempotencyKey(ctx, idempotencyKey, id); err != nil {
-		return domain.ProvisioningSession{}, false, err
+	if !created {
+		return stored, true, nil
 	}
 	if s.audit != nil {
 		_ = s.audit.Record(ctx, audit.Event{SessionID: result.ID, Type: "PROVISIONING_SESSION_CREATED", Result: "SUCCESS", At: now})

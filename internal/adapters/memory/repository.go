@@ -20,6 +20,19 @@ func NewSessionRepository() *SessionRepository {
 	return &SessionRepository{sessions: make(map[string]domain.ProvisioningSession), idempotencyKey: make(map[string]string)}
 }
 
+func (r *SessionRepository) Create(ctx context.Context, s domain.ProvisioningSession) (domain.ProvisioningSession, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if id, ok := r.idempotencyKey[s.IdempotencyKey]; ok {
+		if existing, ok := r.sessions[id]; ok {
+			return existing, false, nil
+		}
+	}
+	r.sessions[s.ID] = s
+	r.idempotencyKey[s.IdempotencyKey] = s.ID
+	return s, true, nil
+}
+
 func (r *SessionRepository) Get(ctx context.Context, id string) (domain.ProvisioningSession, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

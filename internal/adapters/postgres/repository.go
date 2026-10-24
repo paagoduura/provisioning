@@ -19,6 +19,22 @@ func NewSessionRepository(pool *pgxpool.Pool) *SessionRepository {
 	return &SessionRepository{pool: pool}
 }
 
+func (r *SessionRepository) Create(ctx context.Context, s domain.ProvisioningSession) (domain.ProvisioningSession, bool, error) {
+	var insertedID string
+	err := r.pool.QueryRow(ctx, `INSERT INTO provisioning_sessions (id, idempotency_key, user_id, device_uid_hash, device_model, transport, state, correlation_id, created_at, expires_at, failure_code) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, '')) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`, s.ID, s.IdempotencyKey, s.UserID, hashDeviceUID(s.DeviceUID), s.DeviceModel, s.Transport, s.State, s.Correlation, s.CreatedAt, s.ExpiresAt, s.FailureCode).Scan(&insertedID)
+	if err == nil {
+		return s, true, nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		existing, findErr := r.FindByIdempotencyKey(ctx, s.IdempotencyKey)
+		if findErr != nil {
+			return domain.ProvisioningSession{}, false, fmt.Errorf("find concurrent idempotent session: %w", findErr)
+		}
+		return existing, false, nil
+	}
+	return domain.ProvisioningSession{}, false, fmt.Errorf("create session: %w", err)
+}
+
 func (r *SessionRepository) Get(ctx context.Context, id string) (domain.ProvisioningSession, error) {
 	var s domain.ProvisioningSession
 	var deviceHash []byte
