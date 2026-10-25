@@ -20,6 +20,7 @@ var (
 	ErrRequestBinding      = errors.New("attestation request binding mismatch")
 	ErrUnsupportedProvider = errors.New("attestation provider is not configured")
 	ErrCounterRollback     = errors.New("attestation counter did not increase")
+	ErrDeviceRevoked       = errors.New("attestation device key is revoked")
 )
 
 type ChallengeRepository interface {
@@ -33,6 +34,10 @@ type AttestationRecordRepository interface {
 	LatestCounter(context.Context, string, string, string) (uint64, bool, error)
 }
 
+type RevocationChecker interface {
+	IsRevoked(context.Context, string, string) (bool, error)
+}
+
 type Service struct {
 	challenges   ChallengeRepository
 	records      AttestationRecordRepository
@@ -41,8 +46,9 @@ type Service struct {
 		Get(context.Context, string) (domain.ProvisioningSession, error)
 		TransitionToAttested(context.Context, string) (domain.ProvisioningSession, error)
 	}
-	audit audit.Sink
-	now   func() time.Time
+	audit       audit.Sink
+	now         func() time.Time
+	revocations RevocationChecker
 }
 
 func New(challenges ChallengeRepository, records AttestationRecordRepository, verifier Verifier, transitioner interface {
@@ -52,7 +58,14 @@ func New(challenges ChallengeRepository, records AttestationRecordRepository, ve
 	return &Service{challenges: challenges, records: records, verifier: verifier, transitioner: transitioner, audit: auditSink, now: time.Now}
 }
 
-func (s *Service) IssueChallenge(ctx context.Context, sessionID, requestHash string) (Challenge, error) {
+func (s *Service) SetRevocationChecker(checker RevocationChecker) { s.revocations = checker }
+
+func (s *Service) IssueChallenge(ctx context.Context, sessionID, requestHash string) (challenge Challenge, err error) {
+	defer func() {
+		if err != nil && s.audit != nil {
+			_ = s.audit.Record(ctx, audit.Event{SessionID: sessionID, Type: "ATTESTATION_CHALLENGE_FAILED", Result: "FAILURE", Reason: FailureCode(err), At: s.now()})
+		}
+	}()
 	if strings.TrimSpace(sessionID) == "" {
 		return Challenge{}, errors.New("session id is required")
 	}
@@ -78,14 +91,19 @@ func (s *Service) IssueChallenge(ctx context.Context, sessionID, requestHash str
 	if _, err := rand.Read(idRaw); err != nil {
 		return Challenge{}, err
 	}
-	challenge := Challenge{ID: "att_" + base64.RawURLEncoding.EncodeToString(idRaw), SessionID: sessionID, Value: value, RequestHash: requestHash, ExpiresAt: s.now().Add(5 * time.Minute)}
+	challenge = Challenge{ID: "att_" + base64.RawURLEncoding.EncodeToString(idRaw), SessionID: sessionID, Value: value, RequestHash: requestHash, ExpiresAt: s.now().Add(5 * time.Minute)}
 	if err := s.challenges.Create(ctx, challenge); err != nil {
 		return Challenge{}, err
 	}
 	return challenge, nil
 }
 
-func (s *Service) Verify(ctx context.Context, sessionID string, input Submission) (VerifiedResult, error) {
+func (s *Service) Verify(ctx context.Context, sessionID string, input Submission) (result VerifiedResult, err error) {
+	defer func() {
+		if err != nil && s.audit != nil {
+			_ = s.audit.Record(ctx, audit.Event{SessionID: sessionID, Type: "DEVICE_ATTESTATION_FAILED", Result: "FAILURE", Reason: FailureCode(err), At: s.now()})
+		}
+	}()
 	if input.Provider == "" || input.KeyID == "" || input.Assertion == "" || input.RequestHash == "" {
 		return VerifiedResult{}, errors.New("provider, key_id and assertion are required")
 	}
@@ -108,10 +126,19 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 	if challenge.RequestHash != input.RequestHash {
 		return VerifiedResult{}, ErrRequestBinding
 	}
+	if s.revocations != nil {
+		revoked, checkErr := s.revocations.IsRevoked(ctx, input.Provider, input.KeyID)
+		if checkErr != nil {
+			return VerifiedResult{}, checkErr
+		}
+		if revoked {
+			return VerifiedResult{}, ErrDeviceRevoked
+		}
+	}
 	if s.verifier == nil {
 		return VerifiedResult{}, ErrUnsupportedProvider
 	}
-	result, err := s.verifier.Verify(challenge, input)
+	result, err = s.verifier.Verify(challenge, input)
 	if err != nil {
 		return VerifiedResult{}, err
 	}

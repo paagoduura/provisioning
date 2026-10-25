@@ -31,6 +31,7 @@ func main() {
 	var auditSink service.AuditPort
 	var attestationRepo attestation.ChallengeRepository
 	var attestationRecords attestation.AttestationRecordRepository
+	var revocationChecker attestation.RevocationChecker
 	var pool *pgxpool.Pool
 	if cfg.DatabaseURL != "" {
 		pool, err = pgxpool.New(context.Background(), cfg.DatabaseURL)
@@ -51,6 +52,7 @@ func main() {
 		auditSink = postgresadapter.NewAuditSink(pool)
 		attestationRepo = postgresadapter.NewAttestationRepository(pool)
 		attestationRecords = postgresadapter.NewAttestationRepository(pool)
+		revocationChecker = attestationRepo.(attestation.RevocationChecker)
 		log.Info("persistence_selected", "provider", "supabase_postgres")
 	} else {
 		repo = memory.NewSessionRepository()
@@ -58,10 +60,12 @@ func main() {
 		memoryAttestation := memory.NewAttestationRepository()
 		attestationRepo = memoryAttestation
 		attestationRecords = memoryAttestation
+		revocationChecker = memoryAttestation
 		log.Warn("persistence_selected", "provider", "memory", "warning", "development_only")
 	}
 	provisioning := service.New(repo, mock.CryptoService{}, mock.InterswitchAdapter{}, auditSink)
-	attestationService := attestation.New(attestationRepo, attestationRecords, attestation.UnavailableVerifier{}, provisioning, auditSink)
+	attestationService := attestation.New(attestationRepo, attestationRecords, attestation.HSMVerifier{Client: attestation.UnavailableHSM{}}, provisioning, auditSink)
+	attestationService.SetRevocationChecker(revocationChecker)
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes).Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

@@ -76,4 +76,19 @@ func (r *AttestationRepository) LatestCounter(ctx context.Context, sessionID, pr
 	}
 	return counter, true, nil
 }
+func (r *AttestationRepository) Revoke(ctx context.Context, provider, keyID, reason string, at time.Time) error {
+	_, err := r.pool.Exec(ctx, `INSERT INTO device_key_revocations (provider, key_id, reason_code, revoked_at) VALUES ($1, $2, $3, $4) ON CONFLICT (provider, key_id) DO UPDATE SET reason_code = EXCLUDED.reason_code, revoked_at = EXCLUDED.revoked_at`, provider, keyID, reason, at)
+	if err != nil {
+		return fmt.Errorf("revoke device key: %w", err)
+	}
+	return nil
+}
+func (r *AttestationRepository) IsRevoked(ctx context.Context, provider, keyID string) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM device_key_revocations WHERE provider = $1 AND key_id = $2)`, provider, keyID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check device key revocation: %w", err)
+	}
+	return exists, nil
+}
 func digest(value string) []byte { sum := sha256.Sum256([]byte(value)); return sum[:] }

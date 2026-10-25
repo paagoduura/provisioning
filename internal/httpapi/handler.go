@@ -111,7 +111,7 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 		}
 		result, err := h.attestation.IssueChallenge(r.Context(), sessionID, req.RequestHash)
 		if err != nil {
-			writeDomainError(w, err)
+			writeAttestationError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, challengeResponse{ID: result.ID, Challenge: result.Value, ExpiresAt: result.ExpiresAt})
@@ -127,7 +127,7 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 		}
 		result, err := h.attestation.Verify(r.Context(), sessionID, req)
 		if err != nil {
-			writeDomainError(w, err)
+			writeAttestationError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, result)
@@ -145,6 +145,30 @@ func writeDomainError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	}
 	writeError(w, status, err.Error())
+}
+
+func writeAttestationError(w http.ResponseWriter, err error) {
+	code := attestation.FailureCode(err)
+	status := http.StatusUnprocessableEntity
+	switch code {
+	case attestation.FailureChallengeNotFound:
+		status = http.StatusNotFound
+	case attestation.FailureChallengeExpired:
+		status = http.StatusGone
+	case attestation.FailureChallengeUsed:
+		status = http.StatusConflict
+	case attestation.FailureCounterRollback:
+		status = http.StatusConflict
+	case attestation.FailureDeviceRevoked:
+		status = http.StatusForbidden
+	case attestation.FailureProviderUnavailable:
+		status = http.StatusNotImplemented
+	case attestation.FailureHSMUnavailable:
+		status = http.StatusServiceUnavailable
+	case attestation.FailureRequestBinding:
+		status = http.StatusBadRequest
+	}
+	writeJSON(w, status, map[string]string{"error": "attestation verification failed", "failure_code": code})
 }
 
 func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {

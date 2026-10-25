@@ -8,6 +8,7 @@ A security-first backend foundation for wearable secure-element provisioning. Th
 - Explicit provisioning state machine
 - Idempotent session creation with Supabase PostgreSQL persistence when `DATABASE_URL` is configured, plus an in-memory fallback for local development
 - Slice 3 attestation orchestration with one-time challenges, request binding, replay protection, and counter checks
+- Durable device-key revocation checks, typed failure codes, redacted audit events, and an HSM-only verification port
 - Mock Crypto/HSM and Interswitch adapters; **no real payment or key operations**
 - Health and readiness endpoints
 - PostgreSQL schema for the production persistence boundary
