@@ -11,6 +11,7 @@ import (
 
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/kms"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/paagoduura/provisioning/internal/adapters/memory"
 	"github.com/paagoduura/provisioning/internal/adapters/mock"
@@ -29,14 +30,23 @@ func main() {
 		log.Error("invalid_config", "error", err)
 		os.Exit(1)
 	}
-	var repo service.Repository
+		var repo service.Repository
 	var auditSink service.AuditPort
 	var attestationRepo attestation.ChallengeRepository
 	var attestationRecords attestation.AttestationRecordRepository
-	var revocationChecker attestation.RevocationChecker
-	var pool *pgxpool.Pool
-	if cfg.DatabaseURL != "" {
-		pool, err = pgxpool.New(context.Background(), cfg.DatabaseURL)
+		var revocationChecker attestation.RevocationChecker
+		var pool *pgxpool.Pool
+		if cfg.DatabaseURL != "" {
+			poolConfig, parseErr := pgxpool.ParseConfig(cfg.DatabaseURL)
+			if parseErr != nil {
+				log.Error("database_config_failed", "error", parseErr)
+				os.Exit(1)
+			}
+			// Supabase transaction pooling (port 6543) does not preserve named
+			// prepared statements across connections. Simple protocol works for
+			// both pooled and direct PostgreSQL connections.
+			poolConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+			pool, err = pgxpool.NewWithConfig(context.Background(), poolConfig)
 		if err != nil {
 			log.Error("database_config_failed", "error", err)
 			os.Exit(1)
