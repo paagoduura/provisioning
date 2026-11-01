@@ -106,6 +106,7 @@ Write-Host "PASS challenge issuance: $($challenge.id)"
 
 $canonical = "$($challenge.challenge)`n$requestHash`n$($session.id)`n$counter"
 $messagePath = Join-Path ([IO.Path]::GetTempPath()) "provisioning-kms-$nonce.bin"
+$signaturePath = Join-Path ([IO.Path]::GetTempPath()) "provisioning-kms-$nonce.sig"
 $awsArgs = @("kms", "sign", "--region", $AwsRegion, "--key-id", $KmsKeyId, "--message", "fileb://$messagePath", "--message-type", "RAW", "--signing-algorithm", $SigningAlgorithm, "--output", "json")
 if (-not [string]::IsNullOrWhiteSpace($AwsProfile)) {
     $awsArgs = @("--profile", $AwsProfile) + $awsArgs
@@ -116,11 +117,22 @@ try {
     if ($LASTEXITCODE -ne 0) { Fail "AWS KMS Sign failed: $signJson" }
     $signResult = $signJson | ConvertFrom-Json
     if ([string]::IsNullOrWhiteSpace($signResult.Signature)) { Fail "AWS KMS Sign returned no signature" }
+    $signatureBytes = [Convert]::FromBase64String($signResult.Signature)
+    [IO.File]::WriteAllBytes($signaturePath, $signatureBytes)
+
+    $verifyArgs = @("kms", "verify", "--region", $AwsRegion, "--key-id", $KmsKeyId, "--message", "fileb://$messagePath", "--message-type", "RAW", "--signature", "fileb://$signaturePath", "--signing-algorithm", $SigningAlgorithm, "--query", "SignatureValid", "--output", "text")
+    if (-not [string]::IsNullOrWhiteSpace($AwsProfile)) {
+        $verifyArgs = @("--profile", $AwsProfile) + $verifyArgs
+    }
+    $verifyResult = (& aws @verifyArgs 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) { Fail "AWS KMS Verify failed: $verifyResult" }
+    if ($verifyResult -ne "True") { Fail "AWS KMS Verify returned '$verifyResult' for the exact canonical message" }
+    Write-Host "PASS direct AWS KMS verification"
 } finally {
     Remove-Item -LiteralPath $messagePath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $signaturePath -Force -ErrorAction SilentlyContinue
 }
 
-$signatureBytes = [Convert]::FromBase64String($signResult.Signature)
 $assertionJson = (@{ signature = (ConvertTo-Base64Url $signatureBytes); counter = $counter } | ConvertTo-Json -Compress)
 $assertion = ConvertTo-Base64Url ([Text.UTF8Encoding]::new($false).GetBytes($assertionJson))
 Write-Host "PASS KMS signing and canonical message construction"
