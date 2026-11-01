@@ -54,7 +54,8 @@ FROM unnest(ARRAY['provisioning_sessions','audit_events','attestation_challenges
         Fail "read-only migration inspection could not connect: $result"
     }
     foreach ($table in @("provisioning_sessions", "audit_events", "attestation_challenges", "device_attestations", "device_key_revocations")) {
-        if ($result -notmatch [regex]::Escape("$table=t")) {
+        $pattern = [regex]::Escape($table) + "=(true|t)"
+        if ($result -notmatch $pattern) {
             Fail "required migration table is missing: $table"
         }
     }
