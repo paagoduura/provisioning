@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -37,6 +38,9 @@ func Load() (Config, error) {
 	}
 	if cfg.AWSRegion == "" {
 		return Config{}, errors.New("AWS_REGION must not be empty")
+	}
+	if strings.EqualFold(strings.TrimSpace(cfg.Environment), "staging") && strings.TrimSpace(cfg.DatabaseURL) == "" {
+		return Config{}, errors.New("DATABASE_URL is required when ENVIRONMENT=staging; in-memory persistence is development-only")
 	}
 	return cfg, nil
 }

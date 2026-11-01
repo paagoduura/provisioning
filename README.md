@@ -25,6 +25,19 @@ The API listens on `:8080` by default.
 
 Set `DATABASE_URL` to the Supabase connection string to use durable PostgreSQL sessions and audit events. If it is omitted, the service uses the development-only in-memory repository.
 
+`ENVIRONMENT=staging` fails closed during startup unless `DATABASE_URL` is set; staging never falls back to in-memory persistence.
+
+Run the read-only migration check and live AWS KMS attestation walkthrough from Windows PowerShell after starting the API in staging mode:
+
+```powershell
+$env:ENVIRONMENT = "staging"
+$env:DATABASE_URL = "<staging connection string>"
+$env:AWS_KMS_KEY_ID = "<approved asymmetric KMS key ARN>"
+.\scripts\staging-kms-e2e.ps1
+```
+
+The harness creates a session, performs device discovery, issues a challenge, signs the exact canonical message with `aws kms sign`, submits the API assertion, verifies the attested response, checks the final `DEVICE_ATTESTED` state, and inspects the required migration tables without changing the database. Use `-SkipDatabaseCheck` only for an explicitly local API run; it does not bypass the application's staging startup guard.
+
 Set `AWS_KMS_KEY_ID` to enable the AWS KMS verifier. The API then accepts `provider=aws-kms` only when the submitted `key_id` exactly matches that configured key. The assertion is a base64url-encoded JSON envelope containing `signature` (base64url) and a positive `counter`; the signature covers the canonical challenge message, and the counter is protected by the existing monotonic replay policy. The runtime loads AWS credentials through the standard AWS SDK credential chain and never receives a private key.
 
 This adapter is valid only for a protocol where the signing key corresponding to the configured KMS asymmetric key is the authorized verification key. AWS KMS `Verify` cannot validate arbitrary device public keys just because their IDs are submitted. It is therefore not a replacement for Apple App Attest, Android Play Integrity, or a per-device public-key registry; those providers still require their own certified verification paths.
