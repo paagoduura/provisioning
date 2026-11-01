@@ -46,16 +46,19 @@ function Assert-RequiredTables([string]$ConnectionString) {
     }
 
     $query = @"
-SELECT string_agg(format('%s=%s', required_table, (to_regclass(format('public.%s', required_table)) IS NOT NULL)::text), E'\n' ORDER BY required_table)
-FROM unnest(ARRAY['provisioning_sessions','audit_events','attestation_challenges','device_attestations','device_key_revocations']::text[]) AS required(required_table);
+SELECT required_table
+FROM unnest(ARRAY['provisioning_sessions','audit_events','attestation_challenges','device_attestations','device_key_revocations']::text[]) AS required(required_table)
+WHERE to_regclass(format('public.%s', required_table)) IS NOT NULL
+ORDER BY required_table;
 "@
     $result = & psql $ConnectionString --no-psqlrc --tuples-only --no-align --command $query 2>&1
     if ($LASTEXITCODE -ne 0) {
         Fail "read-only migration inspection could not connect: $result"
     }
+    $resultText = $result -join "`n"
     foreach ($table in @("provisioning_sessions", "audit_events", "attestation_challenges", "device_attestations", "device_key_revocations")) {
-        $pattern = [regex]::Escape($table) + "=(true|t)"
-        if ($result -notmatch $pattern) {
+        $pattern = "(?m)^\s*" + [regex]::Escape($table) + "\s*$"
+        if ($resultText -notmatch $pattern) {
             Fail "required migration table is missing: $table"
         }
     }
