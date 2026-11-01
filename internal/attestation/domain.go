@@ -10,6 +10,7 @@ type Challenge struct {
 	SessionID   string
 	Value       string
 	RequestHash string
+	RequestHashDigest []byte
 	ExpiresAt   time.Time
 	UsedAt      *time.Time
 }

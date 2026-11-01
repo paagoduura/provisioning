@@ -1,6 +1,7 @@
 package attestation
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -123,7 +124,11 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 	if challenge.SessionID != sessionID {
 		return VerifiedResult{}, ErrRequestBinding
 	}
-	if challenge.RequestHash != input.RequestHash {
+	if len(challenge.RequestHashDigest) > 0 {
+		if !bytes.Equal(challenge.RequestHashDigest, hashRequest(input.RequestHash)) {
+			return VerifiedResult{}, ErrRequestBinding
+		}
+	} else if challenge.RequestHash != input.RequestHash {
 		return VerifiedResult{}, ErrRequestBinding
 	}
 	if s.revocations != nil {
