@@ -1,6 +1,9 @@
 package attestation
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 type Challenge struct {
 	ID          string
@@ -27,5 +30,5 @@ type VerifiedResult struct {
 }
 
 type Verifier interface {
-	Verify(Challenge, Submission) (VerifiedResult, error)
+	Verify(context.Context, Challenge, Submission) (VerifiedResult, error)
 }

@@ -15,14 +15,14 @@ type HSMClient interface {
 // verifies device signatures in application memory.
 type HSMVerifier struct{ Client HSMClient }
 
-func (v HSMVerifier) Verify(challenge Challenge, input Submission) (VerifiedResult, error) {
+func (v HSMVerifier) Verify(ctx context.Context, challenge Challenge, input Submission) (VerifiedResult, error) {
 	if input.Provider != "hsm-device" {
 		return VerifiedResult{}, ErrUnsupportedProvider
 	}
 	if v.Client == nil {
 		return VerifiedResult{}, ErrHSMUnavailable
 	}
-	counter, err := v.Client.VerifyDeviceSignature(context.Background(), input.KeyID, []byte(challenge.Value+"\n"+input.RequestHash+"\n"+challenge.SessionID), []byte(input.Assertion))
+	counter, err := v.Client.VerifyDeviceSignature(ctx, input.KeyID, canonicalMessage(challenge, input), []byte(input.Assertion))
 	if err != nil {
 		return VerifiedResult{}, err
 	}

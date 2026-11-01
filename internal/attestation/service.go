@@ -138,7 +138,7 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 	if s.verifier == nil {
 		return VerifiedResult{}, ErrUnsupportedProvider
 	}
-	result, err = s.verifier.Verify(challenge, input)
+	result, err = s.verifier.Verify(ctx, challenge, input)
 	if err != nil {
 		return VerifiedResult{}, err
 	}

@@ -8,12 +8,15 @@ import (
 )
 
 type Config struct {
-	HTTPAddr            string
-	Environment         string
-	LogLevel            string
-	DatabaseURL         string
-	MaxRequestBodyBytes int64
-	ShutdownTimeout     time.Duration
+	HTTPAddr               string
+	Environment            string
+	LogLevel               string
+	DatabaseURL            string
+	AWSRegion              string
+	AWSKMSKeyID            string
+	AWSKMSSigningAlgorithm string
+	MaxRequestBodyBytes    int64
+	ShutdownTimeout        time.Duration
 }
 
 func Load() (Config, error) {
@@ -25,12 +28,15 @@ func Load() (Config, error) {
 	if err != nil || shutdownSeconds < 1 {
 		return Config{}, errors.New("SHUTDOWN_TIMEOUT_SECONDS must be a positive integer")
 	}
-	cfg := Config{HTTPAddr: getenv("HTTP_ADDR", ":8080"), Environment: getenv("ENVIRONMENT", "development"), LogLevel: getenv("LOG_LEVEL", "info"), DatabaseURL: os.Getenv("DATABASE_URL"), MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second}
+	cfg := Config{HTTPAddr: getenv("HTTP_ADDR", ":8080"), Environment: getenv("ENVIRONMENT", "development"), LogLevel: getenv("LOG_LEVEL", "info"), DatabaseURL: os.Getenv("DATABASE_URL"), AWSRegion: getenv("AWS_REGION", "eu-north-1"), AWSKMSKeyID: os.Getenv("AWS_KMS_KEY_ID"), AWSKMSSigningAlgorithm: getenv("AWS_KMS_SIGNING_ALGORITHM", "RSASSA_PKCS1_V1_5_SHA_256"), MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second}
 	if cfg.HTTPAddr == "" {
 		return Config{}, errors.New("HTTP_ADDR must not be empty")
 	}
 	if cfg.MaxRequestBodyBytes < 1024 {
 		return Config{}, errors.New("MAX_REQUEST_BODY_BYTES must be at least 1024")
+	}
+	if cfg.AWSRegion == "" {
+		return Config{}, errors.New("AWS_REGION must not be empty")
 	}
 	return cfg, nil
 }

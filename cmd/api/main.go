@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	awscfg "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/paagoduura/provisioning/internal/adapters/memory"
 	"github.com/paagoduura/provisioning/internal/adapters/mock"
@@ -64,7 +66,24 @@ func main() {
 		log.Warn("persistence_selected", "provider", "memory", "warning", "development_only")
 	}
 	provisioning := service.New(repo, mock.CryptoService{}, mock.InterswitchAdapter{}, auditSink)
-	attestationService := attestation.New(attestationRepo, attestationRecords, attestation.HSMVerifier{Client: attestation.UnavailableHSM{}}, provisioning, auditSink)
+	var verifier attestation.Verifier = attestation.UnavailableVerifier{}
+	if cfg.AWSKMSKeyID != "" {
+		algorithm, algorithmErr := attestation.ParseKMSAlgorithm(cfg.AWSKMSSigningAlgorithm)
+		if algorithmErr != nil {
+			log.Error("kms_config_failed", "error", algorithmErr)
+			os.Exit(1)
+		}
+		awsConfig, awsErr := awscfg.LoadDefaultConfig(context.Background(), awscfg.WithRegion(cfg.AWSRegion))
+		if awsErr != nil {
+			log.Error("aws_config_failed", "error", awsErr)
+			os.Exit(1)
+		}
+		verifier = attestation.KMSVerifier{Client: kms.NewFromConfig(awsConfig), KeyID: cfg.AWSKMSKeyID, Algorithm: algorithm}
+		log.Info("attestation_verifier_selected", "provider", attestation.KMSProvider, "region", cfg.AWSRegion)
+	} else {
+		log.Warn("attestation_verifier_selected", "provider", "unavailable", "warning", "set AWS_KMS_KEY_ID or configure the HSM adapter before production use")
+	}
+	attestationService := attestation.New(attestationRepo, attestationRecords, verifier, provisioning, auditSink)
 	attestationService.SetRevocationChecker(revocationChecker)
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes).Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

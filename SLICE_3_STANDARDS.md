@@ -10,6 +10,16 @@ The Apple verifier must validate the App Attest CBOR/WebAuthn-derived object, Ap
 
 The runtime exposes an HSM-only verification port and is deliberately connected to a fail-closed unavailable client in this environment. No software fallback is allowed. Genuine-device acceptance therefore requires an approved PKCS#11 or managed-HSM client plus real Apple/Android validation fixtures. Until those external prerequisites are supplied, altered, cloned, revoked, and otherwise unverified devices fail closed.
 
+## AWS-backed verification boundary
+
+The production adapter supports AWS KMS asymmetric `Verify` for the explicit `aws-kms` provider. The configured key ID is exact-match bound to the submitted device key ID; the API never accepts a caller-selected KMS key. The signing algorithm is allowlisted, and the assertion counter is included in the signed canonical message before the existing monotonic counter check. The verifier uses the request context and the AWS SDK default credential chain; private key material is never present in the service.
+
+The deployment role must receive only `kms:Verify` on the single approved asymmetric `SIGN_VERIFY` key. Key policy, rotation or retirement, CloudTrail monitoring, and incident response remain deployment controls. A KMS key ARN and a real device/provider fixture are required before genuine-device acceptance can be claimed.
+
+KMS `Verify` validates signatures for the public key corresponding to the configured KMS key. A submitted device key ID does not cause KMS to verify an arbitrary public key. Consequently, this adapter is not a generic replacement for Apple App Attest, Android Play Integrity, or a per-device public-key registry; those provider-specific verification paths remain required for their respective device ecosystems.
+
+CloudHSM remains a separate implementation path requiring the approved AWS CloudHSM PKCS#11 client, cluster networking, crypto-user secret handling, and an explicit key registry. The application does not silently downgrade CloudHSM requests to software cryptography or KMS.
+
 ## References
 
 - Apple App Attest server validation: https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server

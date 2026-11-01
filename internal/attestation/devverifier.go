@@ -1,6 +1,7 @@
 package attestation
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"errors"
@@ -11,7 +12,7 @@ import (
 // not an Apple App Attest or Android Play Integrity verifier.
 type DevEd25519Verifier struct{ Keys map[string]ed25519.PublicKey }
 
-func (v DevEd25519Verifier) Verify(challenge Challenge, input Submission) (VerifiedResult, error) {
+func (v DevEd25519Verifier) Verify(_ context.Context, challenge Challenge, input Submission) (VerifiedResult, error) {
 	if input.Provider != "dev-ed25519" {
 		return VerifiedResult{}, errors.New("development verifier cannot verify this provider")
 	}
@@ -23,7 +24,7 @@ func (v DevEd25519Verifier) Verify(challenge Challenge, input Submission) (Verif
 	if err != nil || len(signature) != ed25519.SignatureSize {
 		return VerifiedResult{}, errors.New("invalid development assertion encoding")
 	}
-	message := []byte(challenge.Value + "\n" + input.RequestHash + "\n" + challenge.SessionID)
+	message := canonicalMessage(challenge, input)
 	if !ed25519.Verify(key, message, signature) {
 		return VerifiedResult{}, errors.New("development assertion verification failed")
 	}

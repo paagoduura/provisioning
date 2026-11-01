@@ -18,7 +18,7 @@ func (f *fakeHSM) VerifyDeviceSignature(ctx context.Context, keyID string, messa
 
 func TestHSMVerifierDelegatesOpaqueSignature(t *testing.T) {
 	client := &fakeHSM{}
-	result, err := (HSMVerifier{Client: client}).Verify(Challenge{Value: "challenge", SessionID: "session"}, Submission{Provider: "hsm-device", KeyID: "device-key", RequestHash: "request", Assertion: "opaque-device-signature"})
+	result, err := (HSMVerifier{Client: client}).Verify(context.Background(), Challenge{Value: "challenge", SessionID: "session"}, Submission{Provider: "hsm-device", KeyID: "device-key", RequestHash: "request", Assertion: "opaque-device-signature"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func TestHSMVerifierDelegatesOpaqueSignature(t *testing.T) {
 	}
 }
 func TestUnavailableHSMFailsClosed(t *testing.T) {
-	_, err := (HSMVerifier{Client: UnavailableHSM{}}).Verify(Challenge{Value: "c", SessionID: "s"}, Submission{Provider: "hsm-device", KeyID: "k", RequestHash: "r", Assertion: "a"})
+	_, err := (HSMVerifier{Client: UnavailableHSM{}}).Verify(context.Background(), Challenge{Value: "c", SessionID: "s"}, Submission{Provider: "hsm-device", KeyID: "k", RequestHash: "r", Assertion: "a"})
 	if err != ErrHSMUnavailable {
 		t.Fatalf("expected HSM unavailable, got %v", err)
 	}

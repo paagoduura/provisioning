@@ -1,10 +1,13 @@
 package attestation
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 type UnavailableVerifier struct{}
 
-func (UnavailableVerifier) Verify(Challenge, Submission) (VerifiedResult, error) {
+func (UnavailableVerifier) Verify(context.Context, Challenge, Submission) (VerifiedResult, error) {
 	return VerifiedResult{}, ErrUnsupportedProvider
 }
 
