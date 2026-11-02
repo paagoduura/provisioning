@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -94,7 +95,7 @@ func (v KMSVerifier) Verify(ctx context.Context, challenge Challenge, input Subm
 		SigningAlgorithm: v.Algorithm,
 	})
 	if err != nil {
-		return VerifiedResult{}, ErrKMSInvalidSignature
+		return VerifiedResult{}, fmt.Errorf("%w: %v", ErrKMSInvalidSignature, err)
 	}
 	if out == nil || !out.SignatureValid {
 		return VerifiedResult{}, ErrKMSInvalidSignature

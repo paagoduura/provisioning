@@ -125,10 +125,11 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
-		result, err := h.attestation.Verify(r.Context(), sessionID, req)
-		if err != nil {
-			writeAttestationError(w, err)
-			return
+			result, err := h.attestation.Verify(r.Context(), sessionID, req)
+			if err != nil {
+				h.log.Error("attestation_verification_failed", "failure_code", attestation.FailureCode(err), "error", err, "request_id", r.Header.Get("X-Request-ID"))
+				writeAttestationError(w, err)
+				return
 		}
 		writeJSON(w, http.StatusOK, result)
 	default:
