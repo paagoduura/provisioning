@@ -89,7 +89,7 @@ func main() {
 			os.Exit(1)
 		}
 		verifier = attestation.KMSVerifier{Client: kms.NewFromConfig(awsConfig), KeyID: cfg.AWSKMSKeyID, Algorithm: algorithm}
-		log.Info("attestation_verifier_selected", "provider", attestation.KMSProvider, "region", cfg.AWSRegion)
+		log.Info("attestation_verifier_selected", "provider", attestation.KMSProvider, "region", cfg.AWSRegion, "algorithm", cfg.AWSKMSSigningAlgorithm)
 	} else {
 		log.Warn("attestation_verifier_selected", "provider", "unavailable", "warning", "set AWS_KMS_KEY_ID or configure the HSM adapter before production use")
 	}
