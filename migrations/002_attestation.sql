@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS attestation_challenges (
     challenge_value TEXT NOT NULL,
     challenge_hash BYTEA NOT NULL UNIQUE,
     request_hash BYTEA NOT NULL,
+    request_hash_value TEXT NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
     used_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
