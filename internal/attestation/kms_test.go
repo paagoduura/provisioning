@@ -66,6 +66,24 @@ func TestKMSVerifierFailsClosed(t *testing.T) {
 	}
 }
 
+func TestKMSVerifierClassifiesProviderErrorsAsUnavailable(t *testing.T) {
+	client := &fakeKMS{err: errors.New("credential refresh failed")}
+	verifier := KMSVerifier{Client: client, KeyID: "key-1", Algorithm: types.SigningAlgorithmSpecRsassaPkcs1V15Sha256}
+	input := Submission{Provider: KMSProvider, KeyID: verifier.KeyID, RequestHash: "request"}
+	envelope, err := json.Marshal(KMSAssertion{Signature: base64.RawURLEncoding.EncodeToString([]byte("signature")), Counter: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Assertion = base64.RawURLEncoding.EncodeToString(envelope)
+	_, verifyErr := verifier.Verify(context.Background(), Challenge{}, input)
+	if !errors.Is(verifyErr, ErrKMSUnavailable) {
+		t.Fatalf("expected KMS unavailable, got %v", verifyErr)
+	}
+	if got := FailureCode(verifyErr); got != FailureHSMUnavailable {
+		t.Fatalf("expected HSM unavailable failure code, got %s", got)
+	}
+}
+
 func TestParseKMSAlgorithmAllowlist(t *testing.T) {
 	if _, err := ParseKMSAlgorithm("RSASSA_PKCS1_V1_5_SHA_256"); err != nil {
 		t.Fatal(err)
