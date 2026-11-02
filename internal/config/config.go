@@ -32,6 +32,9 @@ func Load() (Config, error) {
 	if cfg.HTTPAddr == "" {
 		return Config{}, errors.New("HTTP_ADDR must not be empty")
 	}
+	if (cfg.Environment == "staging" || cfg.Environment == "production") && cfg.DatabaseURL == "" {
+		return Config{}, errors.New("DATABASE_URL is required for staging and production")
+	}
 	if cfg.MaxRequestBodyBytes < 1024 {
 		return Config{}, errors.New("MAX_REQUEST_BODY_BYTES must be at least 1024")
 	}

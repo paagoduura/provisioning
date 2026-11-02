@@ -21,3 +21,11 @@ func TestLoadRejectsUnsafeBodyLimit(t *testing.T) {
 		t.Fatal("expected body-limit validation error")
 	}
 }
+
+func TestLoadRejectsEphemeralPersistenceOutsideDevelopment(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "staging")
+	t.Setenv("DATABASE_URL", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected staging to require DATABASE_URL")
+	}
+}

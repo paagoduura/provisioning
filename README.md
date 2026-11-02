@@ -25,11 +25,17 @@ The API listens on `:8080` by default.
 
 Set `DATABASE_URL` to the Supabase connection string to use durable PostgreSQL sessions and audit events. If it is omitted, the service uses the development-only in-memory repository.
 
+When `ENVIRONMENT=staging` or `ENVIRONMENT=production`, `DATABASE_URL` is mandatory and startup fails closed rather than using memory persistence. Apply `migrations/001_init.sql` through `migrations/004_attestation_revocations.sql` to the target Supabase project before starting the service.
+
 Set `AWS_KMS_KEY_ID` to enable the AWS KMS verifier. The API then accepts `provider=aws-kms` only when the submitted `key_id` exactly matches that configured key. The assertion is a base64url-encoded JSON envelope containing `signature` (base64url) and a positive `counter`; the signature covers the canonical challenge message, and the counter is protected by the existing monotonic replay policy. The runtime loads AWS credentials through the standard AWS SDK credential chain and never receives a private key.
 
 This adapter is valid only for a protocol where the signing key corresponding to the configured KMS asymmetric key is the authorized verification key. AWS KMS `Verify` cannot validate arbitrary device public keys just because their IDs are submitted. It is therefore not a replacement for Apple App Attest, Android Play Integrity, or a per-device public-key registry; those providers still require their own certified verification paths.
 
 AWS KMS must use an asymmetric `SIGN_VERIFY` key whose signing algorithm matches `AWS_KMS_SIGNING_ALGORITHM`. CloudHSM is not silently substituted: a direct CloudHSM deployment requires the separately approved PKCS#11 adapter, cluster networking, crypto-user secret handling, key registry, and HSM operational controls. Until that adapter is configured, the service remains fail-closed.
+
+For a live staging walkthrough using the configured AWS KMS key, run `powershell -ExecutionPolicy Bypass -File scripts/staging-kms-e2e.ps1` while the API is running. The script creates a session, advances device discovery, requests a one-time challenge, signs the exact canonical message with KMS, submits the attestation, and asserts a successful `aws-kms` result. It does not print the signature or challenge.
+
+On Windows, run `powershell -ExecutionPolicy Bypass -File scripts/set-staging-env.ps1` first. It prompts locally for the full Supabase PostgreSQL URI as a secure input, stores it as a user environment variable, and configures `ENVIRONMENT=staging`, the AWS profile, region, KMS key, and algorithm. Start `go run ./cmd/api` from that same PowerShell window, then run the E2E script. The staging startup guard prevents accidental memory persistence.
 
 ```bash
 curl http://localhost:8080/healthz
