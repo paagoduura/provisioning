@@ -95,7 +95,10 @@ try {
 
     $counter = 1
     $canonicalMessage = "$challengeValue`n$requestHash`n$sessionId`n$counter"
-    [IO.File]::WriteAllBytes($messagePath, [Text.Encoding]::UTF8.GetBytes($canonicalMessage))
+    $canonicalBytes = [Text.Encoding]::UTF8.GetBytes($canonicalMessage)
+    $canonicalDigest = [Security.Cryptography.SHA256]::Create().ComputeHash($canonicalBytes)
+    Write-Output ("canonical_sha256=" + ([BitConverter]::ToString($canonicalDigest).Replace('-', '').ToLowerInvariant()))
+    [IO.File]::WriteAllBytes($messagePath, $canonicalBytes)
 
     & aws kms sign --profile $AwsProfile --region $AwsRegion --key-id $keyId --message "fileb://$messagePath" --message-type RAW --signing-algorithm $SigningAlgorithm --query Signature --output text | Out-File -Encoding ascii -NoNewline $signaturePath
     if ($LASTEXITCODE -ne 0) { throw 'AWS KMS sign command failed.' }
@@ -110,6 +113,13 @@ try {
     }
 
     $signatureUrl = ConvertTo-Base64Url ([IO.File]::ReadAllBytes($signatureBytesPath))
+    $signatureRoundTrip = $signatureUrl.Replace('-', '+').Replace('_', '/')
+    while (($signatureRoundTrip.Length % 4) -ne 0) { $signatureRoundTrip += '=' }
+    [IO.File]::WriteAllBytes($signatureBytesPath, [Convert]::FromBase64String($signatureRoundTrip))
+    $roundTripVerify = & aws kms verify --profile $AwsProfile --region $AwsRegion --key-id $keyId --message "fileb://$messagePath" --message-type RAW --signature "fileb://$signatureBytesPath" --signing-algorithm $SigningAlgorithm --query SignatureValid --output text
+    if ($LASTEXITCODE -ne 0 -or $roundTripVerify.Trim() -ne 'True') {
+        throw "Base64url signature round-trip verification failed: $($roundTripVerify.Trim())"
+    }
     $assertionJson = @{ signature = $signatureUrl; counter = $counter } | ConvertTo-Json -Compress
     $assertion = ConvertTo-Base64Url ([Text.Encoding]::UTF8.GetBytes($assertionJson))
 
