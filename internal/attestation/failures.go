@@ -13,6 +13,9 @@ const (
 	FailureProviderUnavailable = "ATTESTATION_PROVIDER_UNAVAILABLE"
 	FailureHSMUnavailable      = "ATTESTATION_HSM_UNAVAILABLE"
 	FailureVerification        = "ATTESTATION_VERIFICATION_FAILED"
+	FailureKMSKeyMismatch      = "ATTESTATION_KMS_KEY_MISMATCH"
+	FailureKMSInvalidAssertion = "ATTESTATION_KMS_INVALID_ASSERTION"
+	FailureKMSInvalidSignature = "ATTESTATION_KMS_SIGNATURE_INVALID"
 	FailurePersistence         = "ATTESTATION_PERSISTENCE_FAILED"
 )
 
@@ -34,6 +37,14 @@ func FailureCode(err error) string {
 		return FailureProviderUnavailable
 	case errors.Is(err, ErrHSMUnavailable):
 		return FailureHSMUnavailable
+	case errors.Is(err, ErrKMSUnavailable):
+		return FailureHSMUnavailable
+	case errors.Is(err, ErrKMSKeyMismatch):
+		return FailureKMSKeyMismatch
+	case errors.Is(err, ErrKMSInvalidAssertion):
+		return FailureKMSInvalidAssertion
+	case errors.Is(err, ErrKMSInvalidSignature):
+		return FailureKMSInvalidSignature
 	default:
 		return FailureVerification
 	}

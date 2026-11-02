@@ -84,6 +84,22 @@ func TestKMSVerifierClassifiesProviderErrorsAsUnavailable(t *testing.T) {
 	}
 }
 
+func TestKMSFailureCodesAreStable(t *testing.T) {
+	checks := []struct {
+		err  error
+		want string
+	}{
+		{ErrKMSKeyMismatch, FailureKMSKeyMismatch},
+		{ErrKMSInvalidAssertion, FailureKMSInvalidAssertion},
+		{ErrKMSInvalidSignature, FailureKMSInvalidSignature},
+	}
+	for _, check := range checks {
+		if got := FailureCode(check.err); got != check.want {
+			t.Fatalf("FailureCode(%v) = %s, want %s", check.err, got, check.want)
+		}
+	}
+}
+
 func TestParseKMSAlgorithmAllowlist(t *testing.T) {
 	if _, err := ParseKMSAlgorithm("RSASSA_PKCS1_V1_5_SHA_256"); err != nil {
 		t.Fatal(err)
