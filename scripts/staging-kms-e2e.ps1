@@ -24,6 +24,9 @@ function Invoke-JsonPost([string]$Uri, [object]$Body, [hashtable]$Headers = @{})
             $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
             $errorBody = $reader.ReadToEnd()
             $reader.Dispose()
+            if ([string]::IsNullOrWhiteSpace($errorBody) -and $_.ErrorDetails.Message) {
+                $errorBody = $_.ErrorDetails.Message
+            }
             throw "POST $Uri failed with HTTP $([int]$response.StatusCode): $errorBody"
         }
         throw
@@ -98,7 +101,14 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'AWS KMS sign command failed.' }
 
     $signatureB64 = (Get-Content -Raw $signaturePath).Trim()
+    if ([string]::IsNullOrWhiteSpace($signatureB64)) { throw 'AWS KMS returned an empty signature.' }
     [IO.File]::WriteAllBytes($signatureBytesPath, [Convert]::FromBase64String($signatureB64))
+
+    $directVerify = & aws kms verify --profile $AwsProfile --region $AwsRegion --key-id $keyId --message "fileb://$messagePath" --message-type RAW --signature "fileb://$signatureBytesPath" --signing-algorithm $SigningAlgorithm --query SignatureValid --output text
+    if ($LASTEXITCODE -ne 0 -or $directVerify.Trim() -ne 'True') {
+        throw "Direct AWS KMS verification failed: $($directVerify.Trim())"
+    }
+
     $signatureUrl = ConvertTo-Base64Url ([IO.File]::ReadAllBytes($signatureBytesPath))
     $assertionJson = @{ signature = $signatureUrl; counter = $counter } | ConvertTo-Json -Compress
     $assertion = ConvertTo-Base64Url ([Text.Encoding]::UTF8.GetBytes($assertionJson))
