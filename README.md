@@ -44,6 +44,22 @@ This adapter is valid only for a protocol where the signing key corresponding to
 
 AWS KMS must use an asymmetric `SIGN_VERIFY` key whose signing algorithm matches `AWS_KMS_SIGNING_ALGORITHM`. CloudHSM is not silently substituted: a direct CloudHSM deployment requires the separately approved PKCS#11 adapter, cluster networking, crypto-user secret handling, key registry, and HSM operational controls. Until that adapter is configured, the service remains fail-closed.
 
+## Deploy staging to ECS Fargate
+
+The repository includes `infra/ecs-staging.yml` and `scripts/deploy-ecs-staging.ps1` for an idempotent ECS Fargate deployment in the AWS account and region selected by the AWS CLI profile. The script discovers the default VPC's first two public subnets, creates or updates an ECR repository, stores `DATABASE_URL` in Secrets Manager, builds and pushes the container, and deploys an ECS service behind an internet-facing Application Load Balancer. The ECS task role is scoped to `kms:Verify` on the configured KMS key, and the execution role is scoped to CloudWatch Logs, ECR pull, and the database secret.
+
+Run from the repository root after authenticating the AWS CLI. Do not put the database URL in source control:
+
+```powershell
+$env:AWS_PROFILE = "chris-stev"
+$env:AWS_REGION = "eu-north-1"
+$env:AWS_KMS_KEY_ID = "<approved asymmetric KMS key ARN>"
+$env:DATABASE_URL = "<current private Supabase pooler URL>"
+.\scripts\deploy-ecs-staging.ps1
+```
+
+The staging template intentionally uses HTTP on port 80 because no domain or ACM certificate is assumed. Before exposing it beyond controlled staging, add an ACM certificate and HTTPS listener, restrict ALB ingress, and add a domain/DNS record. ECS tasks use public IPs to reach the external Supabase pooler without requiring a NAT gateway; review that networking choice before production.
+
 ```bash
 curl http://localhost:8080/healthz
 curl -X POST http://localhost:8080/v1/provisioning-sessions \\
