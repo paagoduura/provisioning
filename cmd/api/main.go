@@ -83,7 +83,11 @@ func main() {
 			log.Error("kms_config_failed", "error", algorithmErr)
 			os.Exit(1)
 		}
-		awsConfig, awsErr := awscfg.LoadDefaultConfig(context.Background(), awscfg.WithRegion(cfg.AWSRegion))
+			awsOptions := []func(*awscfg.LoadOptions) error{awscfg.WithRegion(cfg.AWSRegion)}
+			if awsProfile := os.Getenv("AWS_PROFILE"); awsProfile != "" {
+				awsOptions = append(awsOptions, awscfg.WithSharedConfigProfile(awsProfile))
+			}
+			awsConfig, awsErr := awscfg.LoadDefaultConfig(context.Background(), awsOptions...)
 		if awsErr != nil {
 			log.Error("aws_config_failed", "error", awsErr)
 			os.Exit(1)
