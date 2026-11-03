@@ -48,7 +48,15 @@ function Invoke-ExpectedReplay([string]$Uri, [object]$Body) {
         if ([int]$response.StatusCode -ne 409) {
             throw "Replay request returned HTTP $([int]$response.StatusCode), expected 409: $errorBody"
         }
-		return ($errorBody | ConvertFrom-Json)
+		$errorResult = $errorBody | ConvertFrom-Json
+		$failureCode = [string]$errorResult.failure_code
+		if ([string]::IsNullOrWhiteSpace($failureCode)) {
+			$failureCode = [string]$errorResult.FailureCode
+		}
+		if ([string]::IsNullOrWhiteSpace($failureCode)) {
+			throw "Replay response did not contain failure_code: $errorBody"
+		}
+		return [pscustomobject]@{ failure_code = $failureCode }
 	}
 }
 
@@ -68,10 +76,14 @@ function Invoke-ExpectedFailure([string]$Uri, [object]$Body, [int]$ExpectedStatu
 			throw "Negative request returned HTTP $([int]$response.StatusCode), expected ${ExpectedStatus}: $errorBody"
 		}
 		$errorResult = $errorBody | ConvertFrom-Json
-		if ($errorResult.failure_code -ne $ExpectedCode) {
-			throw "Negative request returned $($errorResult.failure_code), expected $ExpectedCode"
+		$failureCode = [string]$errorResult.failure_code
+		if ([string]::IsNullOrWhiteSpace($failureCode)) {
+			$failureCode = [string]$errorResult.FailureCode
 		}
-		return $errorResult
+		if ($failureCode -ne $ExpectedCode) {
+			throw "Negative request returned $failureCode, expected $ExpectedCode: $errorBody"
+		}
+		return [pscustomobject]@{ failure_code = $failureCode }
 	}
 }
 
