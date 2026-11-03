@@ -76,7 +76,7 @@ func main() {
 		log.Warn("persistence_selected", "provider", "memory", "warning", "development_only")
 	}
 	provisioning := service.New(repo, mock.CryptoService{}, mock.InterswitchAdapter{}, auditSink)
-	var verifier attestation.Verifier = attestation.UnavailableVerifier{}
+	verifiers := attestation.ProviderRouter{}
 	if cfg.AWSKMSKeyID != "" {
 		algorithm, algorithmErr := attestation.ParseKMSAlgorithm(cfg.AWSKMSSigningAlgorithm)
 		if algorithmErr != nil {
@@ -92,12 +92,37 @@ func main() {
 			log.Error("aws_config_failed", "error", awsErr)
 			os.Exit(1)
 		}
-		verifier = attestation.KMSVerifier{Client: kms.NewFromConfig(awsConfig), KeyID: cfg.AWSKMSKeyID, Algorithm: algorithm}
+		verifiers[attestation.KMSProvider] = attestation.KMSVerifier{Client: kms.NewFromConfig(awsConfig), KeyID: cfg.AWSKMSKeyID, Algorithm: algorithm}
 		log.Info("attestation_verifier_selected", "provider", attestation.KMSProvider, "region", cfg.AWSRegion)
-	} else {
-		log.Warn("attestation_verifier_selected", "provider", "unavailable", "warning", "set AWS_KMS_KEY_ID or configure the HSM adapter before production use")
 	}
-	attestationService := attestation.New(attestationRepo, attestationRecords, verifier, provisioning, auditSink)
+	if cfg.AppleAppID != "" || cfg.AppleRootCertificate != "" {
+		if cfg.AppleAppID == "" || cfg.AppleRootCertificate == "" {
+			log.Error("apple_app_attest_config_failed", "error", "APPLE_APP_ID and APPLE_APP_ATTEST_ROOT_CERT_FILE must be configured together")
+			os.Exit(1)
+		}
+		rootPEM, readErr := os.ReadFile(cfg.AppleRootCertificate)
+		if readErr != nil {
+			log.Error("apple_app_attest_config_failed", "error", readErr)
+			os.Exit(1)
+		}
+		root, rootErr := attestation.LoadAppleRootCertificatePEM(rootPEM)
+		if rootErr != nil {
+			log.Error("apple_app_attest_config_failed", "error", rootErr)
+			os.Exit(1)
+		}
+		var appleKeys attestation.AppleKeyStore
+		if pool != nil {
+			appleKeys = postgresadapter.NewAppleAppAttestKeyStore(pool)
+		} else {
+			appleKeys = attestation.NewMemoryAppleKeyStore()
+		}
+		verifiers[attestation.AppleAppAttestProvider] = attestation.AppleAppAttestVerifier{AppID: cfg.AppleAppID, Environment: cfg.AppleEnvironment, AppleRoot: root, Keys: appleKeys}
+		log.Info("attestation_verifier_selected", "provider", attestation.AppleAppAttestProvider, "environment", cfg.AppleEnvironment)
+	}
+	if len(verifiers) == 0 {
+		log.Warn("attestation_verifier_selected", "provider", "unavailable", "warning", "configure AWS KMS or Apple App Attest before production use")
+	}
+	attestationService := attestation.New(attestationRepo, attestationRecords, verifiers, provisioning, auditSink)
 	attestationService.SetRevocationChecker(revocationChecker)
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes).Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

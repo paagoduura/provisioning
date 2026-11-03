@@ -47,7 +47,7 @@ function Assert-RequiredTables([string]$ConnectionString) {
 
     $query = @"
 SELECT required_table
-FROM unnest(ARRAY['provisioning_sessions','audit_events','attestation_challenges','device_attestations','device_key_revocations']::text[]) AS required(required_table)
+FROM unnest(ARRAY['provisioning_sessions','audit_events','attestation_challenges','device_attestations','device_key_revocations','apple_app_attest_keys']::text[]) AS required(required_table)
 WHERE to_regclass(format('public.%s', required_table)) IS NOT NULL
 ORDER BY required_table;
 "@
@@ -56,7 +56,7 @@ ORDER BY required_table;
         Fail "read-only migration inspection could not connect: $result"
     }
     $resultText = $result -join "`n"
-    foreach ($table in @("provisioning_sessions", "audit_events", "attestation_challenges", "device_attestations", "device_key_revocations")) {
+	foreach ($table in @("provisioning_sessions", "audit_events", "attestation_challenges", "device_attestations", "device_key_revocations", "apple_app_attest_keys")) {
         $pattern = "(?m)^\s*" + [regex]::Escape($table) + "\s*$"
         if ($resultText -notmatch $pattern) {
             Fail "required migration table is missing: $table"

@@ -132,6 +132,22 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, result)
+	case "attestation-registration":
+		if h.attestation == nil {
+			writeError(w, http.StatusServiceUnavailable, "attestation service unavailable")
+			return
+		}
+		var req attestation.Submission
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if err := h.attestation.Register(r.Context(), sessionID, req); err != nil {
+			h.log.Error("attestation_registration_failed", "failure_code", attestation.FailureCode(err), "error", err, "request_id", r.Header.Get("X-Request-ID"))
+			writeAttestationError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, map[string]string{"status": "registered"})
 	default:
 		writeError(w, http.StatusNotFound, "unknown session action")
 	}

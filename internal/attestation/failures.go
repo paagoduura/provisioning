@@ -30,6 +30,8 @@ func FailureCode(err error) string {
 		return FailureCounterRollback
 	case errors.Is(err, ErrDeviceRevoked):
 		return FailureDeviceRevoked
+	case errors.Is(err, ErrInvalidAttestationRegistration):
+		return FailureInvalidRequest
 	case errors.Is(err, ErrUnsupportedProvider):
 		return FailureProviderUnavailable
 	case errors.Is(err, ErrHSMUnavailable):

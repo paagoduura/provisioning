@@ -10,6 +10,7 @@ A security-first backend foundation for wearable secure-element provisioning. Th
 - Slice 3 attestation orchestration with one-time challenges, request binding, replay protection, and counter checks
 - Durable device-key revocation checks, typed failure codes, redacted audit events, and an HSM-only verification port
 - AWS KMS asymmetric verification adapter; KMS keeps the verification key under AWS HSM protection and is enabled only with an exact configured key ID
+- Apple App Attest attestation registration and assertion verification with durable public-key storage
 - Mock Crypto/HSM and Interswitch adapters; **no real payment or key operations**
 - Health and readiness endpoints
 - PostgreSQL schema for the production persistence boundary
@@ -68,6 +69,14 @@ $env:DATABASE_URL = "<current private Supabase pooler URL>"
 
 The staging template intentionally uses HTTP on port 80 because no domain or ACM certificate is assumed. Before exposing it beyond controlled staging, add an ACM certificate and HTTPS listener, restrict ALB ingress, and add a domain/DNS record. ECS tasks use public IPs to reach the external Supabase pooler without requiring a NAT gateway; review that networking choice before production.
 
+## Apple App Attest
+
+The server supports Apple App Attest through two endpoints. First, issue a normal attestation challenge and send the app's `attestationObject` to `POST /v1/provisioning-sessions/{id}/attestation-registration` with `provider=apple-app-attest`, the App Attest `key_id`, and the same `request_hash`. The server validates the CBOR object, Apple certificate chain, App ID hash, development/sandbox/production AAGUID, zero initial counter, credential ID, public-key hash, and Apple nonce extension before storing only the certified public key. Subsequent assertions go to the existing `POST /v1/provisioning-sessions/{id}/attestation` endpoint with `assertion` containing the base64url CBOR assertion object and `client_data` containing the base64url bytes of the JSON client data that the app hashed before calling `generateAssertion`. The client data must contain the exact server `challenge` and `request_hash` values.
+
+Configure the server with `APPLE_APP_ID` set to the App ID prefix plus bundle identifier, `APPLE_APP_ATTEST_ENVIRONMENT` set to `production`, `sandbox`, or `development`, and `APPLE_APP_ATTEST_ROOT_CERT_FILE` pointing to Apple's App Attest root certificate PEM. In staging and production, `DATABASE_URL` is required so registered public keys survive restarts. The verifier fails closed when any Apple configuration or durable key store is unavailable.
+
+The implementation follows Apple's [server validation guide](https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server) and [attestation object validation guide](https://developer.apple.com/documentation/devicecheck/attestation-object-validation-guide). A real Apple App ID, Apple root certificate file, iOS client using `DCAppAttestService`, and sandbox or production device fixture are still required to activate and exercise the path end to end. Sandbox keys and receipts cannot be reused in production.
+
 ```bash
 curl http://localhost:8080/healthz
 curl -X POST http://localhost:8080/v1/provisioning-sessions \\
@@ -83,9 +92,8 @@ The mobile app must never receive manufacturer master keys, HSM credentials, raw
 ## Next implementation slices
 
 1. OAuth/OIDC authentication and app/device identity integration
-2. Apple App Attest verifier with production certificate fixtures
-3. Android Play Integrity verifier with Google Cloud configuration
-4. Real device registry and lifecycle controls
-5. HSM-backed Crypto Service over mTLS
-6. Interswitch sandbox adapter with signed webhooks
-7. Hardware-in-the-loop APDU contract tests
+2. Android Play Integrity verifier with Google Cloud configuration
+3. Real device registry and lifecycle controls
+4. HSM-backed Crypto Service over mTLS
+5. Interswitch sandbox adapter with signed webhooks
+6. Hardware-in-the-loop APDU contract tests

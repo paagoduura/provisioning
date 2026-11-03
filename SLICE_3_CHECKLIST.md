@@ -26,7 +26,8 @@
 | Repeatable live KMS E2E harness | Complete as a validation artifact | `scripts/staging-kms-e2e.ps1` performs read-only migration inspection, session creation, discovery, challenge issuance, exact canonical-message KMS signing, API verification, and final `DEVICE_ATTESTED` assertion |
 | CloudHSM-backed production verification | Blocked by external prerequisite | Requires approved PKCS#11 client adapter, cluster networking, crypto-user secret handling, key registry, and HSM operational controls |
 | Development test provider | Complete | Explicit Ed25519-only verifier, not a platform trust substitute |
-| Genuine Apple/Android devices pass | Blocked by external prerequisite | Requires real provider verifiers, app identities, vendor credentials, and device fixtures |
-| Apple App Attest validation | Blocked by external prerequisite | Requires Apple App ID, root/certificate validation fixtures, and iOS test app |
+| Genuine Apple/Android devices pass | Blocked by external prerequisite | Requires real provider app identities, vendor credentials, and device fixtures |
+| Apple App Attest server implementation | Complete at provider boundary | CBOR attestation registration, Apple certificate/nonce/App ID/AAGUID/key-ID checks, ECDSA assertion verification, monotonic counter enforcement, registration endpoint, and durable PostgreSQL public-key store |
+| Apple App Attest live activation | Blocked by external prerequisite | Requires Apple App ID, Apple App Attest root certificate file, iOS test app using `DCAppAttestService`, and sandbox or production device fixtures |
 | Android Play Integrity validation | Blocked by external prerequisite | Requires package identity, Google Cloud service account, and Android test app |
 | Tests, race detection, vet, build | Complete locally | Unit tests, race tests, vet, and build pass; live API walkthrough remains dependent on the active staging endpoint, Supabase availability, and AWS credentials |

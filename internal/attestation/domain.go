@@ -16,11 +16,13 @@ type Challenge struct {
 }
 
 type Submission struct {
-	ChallengeID string `json:"challenge_id"`
-	Provider    string `json:"provider"`
-	KeyID       string `json:"key_id"`
-	Assertion   string `json:"assertion"`
-	RequestHash string `json:"request_hash"`
+	ChallengeID       string `json:"challenge_id"`
+	Provider          string `json:"provider"`
+	KeyID             string `json:"key_id"`
+	Assertion         string `json:"assertion"`
+	RequestHash       string `json:"request_hash"`
+	ClientData        string `json:"client_data,omitempty"`
+	AttestationObject string `json:"attestation_object,omitempty"`
 }
 
 type VerifiedResult struct {
