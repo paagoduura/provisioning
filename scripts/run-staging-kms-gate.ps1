@@ -102,11 +102,17 @@ try {
         [void]$startInfo.EnvironmentVariables[$entry.Key]
         $startInfo.EnvironmentVariables[$entry.Key] = [string]$entry.Value
     }
-    foreach ($name in @('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_PROFILE', 'AWS_SDK_LOAD_CONFIG', 'AWS_EC2_METADATA_DISABLED', 'AWS_KMS_KEY_ID', 'AWS_KMS_SIGNING_ALGORITHM', 'DATABASE_URL', 'ENVIRONMENT')) {
-        if (Test-Path "Env:$name") {
-            $startInfo.EnvironmentVariables[$name] = [string](Get-Item "Env:$name").Value
+    foreach ($name in @('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_SDK_LOAD_CONFIG', 'AWS_EC2_METADATA_DISABLED', 'AWS_KMS_KEY_ID', 'AWS_KMS_SIGNING_ALGORITHM', 'DATABASE_URL', 'ENVIRONMENT')) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ($null -ne $value) {
+            $startInfo.EnvironmentVariables[$name] = [string]$value
         }
     }
+    [void]$startInfo.EnvironmentVariables.Remove('AWS_PROFILE')
+    if ([string]::IsNullOrWhiteSpace($startInfo.EnvironmentVariables['AWS_ACCESS_KEY_ID']) -or [string]::IsNullOrWhiteSpace($startInfo.EnvironmentVariables['AWS_SECRET_ACCESS_KEY'])) {
+        Fail 'explicit AWS credentials were not present in the API child environment'
+    }
+    Write-Host 'PASS explicit AWS credentials prepared for API child (values omitted)'
     $apiProcess = New-Object System.Diagnostics.Process
     $apiProcess.StartInfo = $startInfo
     $apiProcess.EnableRaisingEvents = $true
