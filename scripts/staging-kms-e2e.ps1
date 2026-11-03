@@ -81,7 +81,7 @@ function Invoke-ExpectedFailure([string]$Uri, [object]$Body, [int]$ExpectedStatu
 			$failureCode = [string]$errorResult.FailureCode
 		}
 		if ($failureCode -ne $ExpectedCode) {
-			throw "Negative request returned $failureCode, expected $ExpectedCode: $errorBody"
+			throw "Negative request returned $failureCode, expected ${ExpectedCode}: $errorBody"
 		}
 		return [pscustomobject]@{ failure_code = $failureCode }
 	}
