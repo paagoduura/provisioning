@@ -14,6 +14,34 @@ function Fail([string]$Message) {
     throw "Slice 3 acceptance gate failed: $Message"
 }
 
+function Export-AwsProfileCredentials {
+    if ([string]::IsNullOrWhiteSpace($env:AWS_PROFILE)) {
+        return
+    }
+    $credentialJson = (& aws configure export-credentials --profile $env:AWS_PROFILE --format process 2>&1 | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        Fail "could not export credentials for AWS profile '$($env:AWS_PROFILE)': $credentialJson"
+    }
+    try {
+        $credentials = $credentialJson | ConvertFrom-Json
+    } catch {
+        Fail "AWS credential export returned invalid JSON for profile '$($env:AWS_PROFILE)'."
+    }
+    foreach ($name in @('AccessKeyId', 'SecretAccessKey')) {
+        if ([string]::IsNullOrWhiteSpace($credentials.$name)) {
+            Fail "AWS credential export did not include $name for profile '$($env:AWS_PROFILE)'."
+        }
+    }
+    $env:AWS_ACCESS_KEY_ID = $credentials.AccessKeyId
+    $env:AWS_SECRET_ACCESS_KEY = $credentials.SecretAccessKey
+    if ($null -ne $credentials.SessionToken -and -not [string]::IsNullOrWhiteSpace($credentials.SessionToken)) {
+        $env:AWS_SESSION_TOKEN = $credentials.SessionToken
+    } else {
+        Remove-Item Env:AWS_SESSION_TOKEN -ErrorAction SilentlyContinue
+    }
+    Write-Host "PASS AWS credentials exported for profile '$($env:AWS_PROFILE)' (secrets omitted)"
+}
+
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $apiUrl = $ApiBaseUrl.TrimEnd('/')
 $apiPath = [IO.Path]::GetFullPath((Join-Path $repoRoot $ApiExe))
@@ -38,6 +66,7 @@ try {
     if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
         Fail 'AWS CLI is required for KMS signing'
     }
+    Export-AwsProfileCredentials
     if ([string]::IsNullOrWhiteSpace($env:AWS_KMS_KEY_ID)) {
         Fail 'AWS_KMS_KEY_ID must be set'
     }
