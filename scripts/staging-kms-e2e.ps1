@@ -48,8 +48,31 @@ function Invoke-ExpectedReplay([string]$Uri, [object]$Body) {
         if ([int]$response.StatusCode -ne 409) {
             throw "Replay request returned HTTP $([int]$response.StatusCode), expected 409: $errorBody"
         }
-        return ($errorBody | ConvertFrom-Json)
-    }
+		return ($errorBody | ConvertFrom-Json)
+	}
+}
+
+function Invoke-ExpectedFailure([string]$Uri, [object]$Body, [int]$ExpectedStatus, [string]$ExpectedCode) {
+	$json = $Body | ConvertTo-Json -Compress -Depth 8
+	try {
+		Invoke-RestMethod -Method Post -Uri $Uri -ContentType 'application/json' -Body $json | Out-Null
+		throw "Negative request unexpectedly succeeded: $ExpectedCode"
+	}
+	catch {
+		$response = $_.Exception.Response
+		if ($null -eq $response) { throw }
+		$reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+		$errorBody = $reader.ReadToEnd()
+		$reader.Dispose()
+		if ([int]$response.StatusCode -ne $ExpectedStatus) {
+			throw "Negative request returned HTTP $([int]$response.StatusCode), expected ${ExpectedStatus}: $errorBody"
+		}
+		$errorResult = $errorBody | ConvertFrom-Json
+		if ($errorResult.failure_code -ne $ExpectedCode) {
+			throw "Negative request returned $($errorResult.failure_code), expected $ExpectedCode"
+		}
+		return $errorResult
+	}
 }
 
 if ([string]::IsNullOrWhiteSpace($KmsKeyId)) {
@@ -143,11 +166,56 @@ try {
     }
 
     $finalSession = Invoke-RestMethod -Method Get -Uri "$ApiBaseUrl/v1/provisioning-sessions/$sessionId"
-    if ($finalSession.state -ne 'device_attested') {
-        throw "Session did not transition to device_attested: $($finalSession.state)"
-    }
+	if ($finalSession.state -ne 'device_attested') {
+		throw "Session did not transition to device_attested: $($finalSession.state)"
+	}
 
-    Write-Output 'PASS: live KMS-to-API attestation succeeded, durable session state was attested, and replay was rejected.'
+	# Use a fresh session/challenge for negative cryptographic and binding tests.
+	$negativeRunId = [guid]::NewGuid().ToString('N')
+	$negativeSession = Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions" @{
+		user_id = 'staging-e2e-negative-user'
+		device_uid = "staging-e2e-negative-device-$negativeRunId"
+		device_model = 'wearable-staging-fixture'
+		transport = 'ble'
+	} @{ 'Idempotency-Key' = "staging-kms-e2e-negative-$negativeRunId" }
+	$negativeSessionId = [string]$negativeSession.id
+	Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions/$negativeSessionId/device-discovery" @{} | Out-Null
+	$negativeRequestHash = "staging-kms-e2e-negative-request-$negativeRunId"
+	$negativeChallenge = Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions/$negativeSessionId/attestation-challenges" @{ request_hash = $negativeRequestHash }
+	$negativeMessage = "$($negativeChallenge.challenge)`n$negativeRequestHash`n$negativeSessionId`n1"
+	$negativeMessagePath = Join-Path $temporaryDirectory 'negative-message.bin'
+	$negativeSignaturePath = Join-Path $temporaryDirectory 'negative-signature.b64'
+	$negativeSignatureBytesPath = Join-Path $temporaryDirectory 'negative-signature.bin'
+	[IO.File]::WriteAllBytes($negativeMessagePath, [Text.Encoding]::UTF8.GetBytes($negativeMessage))
+	& aws kms sign --profile $AwsProfile --region $AwsRegion --key-id $keyId --message "fileb://$negativeMessagePath" --message-type RAW --signing-algorithm $SigningAlgorithm --query Signature --output text | Out-File -Encoding ascii -NoNewline $negativeSignaturePath
+	if ($LASTEXITCODE -ne 0) { throw 'AWS KMS negative-test sign command failed.' }
+	$negativeSignatureB64 = (Get-Content -Raw $negativeSignaturePath).Trim()
+	$negativeSignatureBytes = [Convert]::FromBase64String($negativeSignatureB64)
+	$negativeSignatureBytes[0] = $negativeSignatureBytes[0] -bxor 1
+	[IO.File]::WriteAllBytes($negativeSignatureBytesPath, $negativeSignatureBytes)
+	$alteredAssertionJson = @{ signature = (ConvertTo-Base64Url $negativeSignatureBytes); counter = 1 } | ConvertTo-Json -Compress
+	$alteredAssertion = ConvertTo-Base64Url ([Text.Encoding]::UTF8.GetBytes($alteredAssertionJson))
+	Invoke-ExpectedFailure "$ApiBaseUrl/v1/provisioning-sessions/$negativeSessionId/attestation" @{
+		challenge_id = $negativeChallenge.id
+		provider = 'aws-kms'
+		key_id = $keyId
+		assertion = $alteredAssertion
+		request_hash = $negativeRequestHash
+	} 422 'ATTESTATION_KMS_SIGNATURE_INVALID' | Out-Null
+
+	$bindingRequestHash = "$negativeRequestHash-2"
+	$bindingChallenge = Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions/$negativeSessionId/attestation-challenges" @{ request_hash = $bindingRequestHash }
+	$bindingAssertionJson = @{ signature = (ConvertTo-Base64Url $negativeSignatureBytes); counter = 1 } | ConvertTo-Json -Compress
+	$bindingAssertion = ConvertTo-Base64Url ([Text.Encoding]::UTF8.GetBytes($bindingAssertionJson))
+	Invoke-ExpectedFailure "$ApiBaseUrl/v1/provisioning-sessions/$negativeSessionId/attestation" @{
+		challenge_id = $bindingChallenge.id
+		provider = 'aws-kms'
+		key_id = $keyId
+		assertion = $bindingAssertion
+		request_hash = "$bindingRequestHash-tampered"
+	} 400 'ATTESTATION_REQUEST_BINDING_MISMATCH' | Out-Null
+
+	Write-Output 'PASS: live KMS-to-API attestation succeeded; durable state, replay protection, altered-signature rejection, and request binding passed.'
 }
 finally {
     if (Test-Path $temporaryDirectory) {

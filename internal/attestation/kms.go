@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -94,7 +95,10 @@ func (v KMSVerifier) Verify(ctx context.Context, challenge Challenge, input Subm
 		SigningAlgorithm: v.Algorithm,
 	})
 	if err != nil {
-		return VerifiedResult{}, ErrKMSInvalidSignature
+		// A KMS API, credential, or network failure is not evidence that the
+		// device signature is invalid. Preserve the fail-closed provider
+		// classification so callers return a 503/HSM-unavailable result.
+		return VerifiedResult{}, fmt.Errorf("%w: %v", ErrKMSUnavailable, err)
 	}
 	if out == nil || !out.SignatureValid {
 		return VerifiedResult{}, ErrKMSInvalidSignature
