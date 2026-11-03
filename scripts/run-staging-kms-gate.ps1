@@ -92,7 +92,31 @@ try {
 
     $env:AWS_EC2_METADATA_DISABLED = 'true'
     $env:ENVIRONMENT = 'staging'
-    $apiProcess = Start-Process -FilePath $apiPath -WorkingDirectory $repoRoot -PassThru -NoNewWindow -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $apiPath
+    $startInfo.WorkingDirectory = $repoRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($entry in [Environment]::GetEnvironmentVariables('Process').GetEnumerator()) {
+        [void]$startInfo.EnvironmentVariables[$entry.Key]
+        $startInfo.EnvironmentVariables[$entry.Key] = [string]$entry.Value
+    }
+    foreach ($name in @('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_PROFILE', 'AWS_SDK_LOAD_CONFIG', 'AWS_EC2_METADATA_DISABLED', 'AWS_KMS_KEY_ID', 'AWS_KMS_SIGNING_ALGORITHM', 'DATABASE_URL', 'ENVIRONMENT')) {
+        if (Test-Path "Env:$name") {
+            $startInfo.EnvironmentVariables[$name] = [string](Get-Item "Env:$name").Value
+        }
+    }
+    $apiProcess = New-Object System.Diagnostics.Process
+    $apiProcess.StartInfo = $startInfo
+    $apiProcess.EnableRaisingEvents = $true
+    $apiProcess.Start() | Out-Null
+    $stdoutTask = $apiProcess.StandardOutput.ReadToEndAsync()
+    $stderrTask = $apiProcess.StandardError.ReadToEndAsync()
+    Register-ObjectEvent -InputObject $apiProcess -EventName Exited -Action {
+        $stdoutTask.Result | Set-Content -Path $stdoutPath
+        $stderrTask.Result | Set-Content -Path $stderrPath
+    } | Out-Null
     Write-Host "Started fresh API process: $($apiProcess.Id)"
 
     $deadline = (Get-Date).AddSeconds($StartupTimeoutSeconds)
@@ -125,6 +149,8 @@ try {
     if ($LASTEXITCODE -ne 0) {
         Fail "staging-kms-e2e.ps1 failed. API logs: $stdoutPath and $stderrPath"
     }
+    $stdoutTask.Result | Set-Content -Path $stdoutPath
+    $stderrTask.Result | Set-Content -Path $stderrPath
     Write-Host 'PASS: Slice 3 staging acceptance gate completed successfully.'
 }
 catch {
