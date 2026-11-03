@@ -6,13 +6,13 @@ import (
 )
 
 type Challenge struct {
-	ID          string
-	SessionID   string
-	Value       string
-	RequestHash string
+	ID                string
+	SessionID         string
+	Value             string
+	RequestHash       string
 	RequestHashDigest []byte
-	ExpiresAt   time.Time
-	UsedAt      *time.Time
+	ExpiresAt         time.Time
+	UsedAt            *time.Time
 }
 
 type Submission struct {

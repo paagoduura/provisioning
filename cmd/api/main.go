@@ -30,23 +30,23 @@ func main() {
 		log.Error("invalid_config", "error", err)
 		os.Exit(1)
 	}
-		var repo service.Repository
+	var repo service.Repository
 	var auditSink service.AuditPort
 	var attestationRepo attestation.ChallengeRepository
 	var attestationRecords attestation.AttestationRecordRepository
-		var revocationChecker attestation.RevocationChecker
-		var pool *pgxpool.Pool
-		if cfg.DatabaseURL != "" {
-			poolConfig, parseErr := pgxpool.ParseConfig(cfg.DatabaseURL)
-			if parseErr != nil {
-				log.Error("database_config_failed", "error", parseErr)
-				os.Exit(1)
-			}
-			// Supabase transaction pooling (port 6543) does not preserve named
-			// prepared statements across connections. Simple protocol works for
-			// both pooled and direct PostgreSQL connections.
-			poolConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
-			pool, err = pgxpool.NewWithConfig(context.Background(), poolConfig)
+	var revocationChecker attestation.RevocationChecker
+	var pool *pgxpool.Pool
+	if cfg.DatabaseURL != "" {
+		poolConfig, parseErr := pgxpool.ParseConfig(cfg.DatabaseURL)
+		if parseErr != nil {
+			log.Error("database_config_failed", "error", parseErr)
+			os.Exit(1)
+		}
+		// Supabase transaction pooling (port 6543) does not preserve named
+		// prepared statements across connections. Simple protocol works for
+		// both pooled and direct PostgreSQL connections.
+		poolConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+		pool, err = pgxpool.NewWithConfig(context.Background(), poolConfig)
 		if err != nil {
 			log.Error("database_config_failed", "error", err)
 			os.Exit(1)
@@ -83,11 +83,11 @@ func main() {
 			log.Error("kms_config_failed", "error", algorithmErr)
 			os.Exit(1)
 		}
-			awsOptions := []func(*awscfg.LoadOptions) error{awscfg.WithRegion(cfg.AWSRegion)}
-			if awsProfile := os.Getenv("AWS_PROFILE"); awsProfile != "" {
-				awsOptions = append(awsOptions, awscfg.WithSharedConfigProfile(awsProfile))
-			}
-			awsConfig, awsErr := awscfg.LoadDefaultConfig(context.Background(), awsOptions...)
+		awsOptions := []func(*awscfg.LoadOptions) error{awscfg.WithRegion(cfg.AWSRegion)}
+		if awsProfile := os.Getenv("AWS_PROFILE"); awsProfile != "" {
+			awsOptions = append(awsOptions, awscfg.WithSharedConfigProfile(awsProfile))
+		}
+		awsConfig, awsErr := awscfg.LoadDefaultConfig(context.Background(), awsOptions...)
 		if awsErr != nil {
 			log.Error("aws_config_failed", "error", awsErr)
 			os.Exit(1)
