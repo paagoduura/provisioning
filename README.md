@@ -38,6 +38,14 @@ $env:AWS_KMS_KEY_ID = "<approved asymmetric KMS key ARN>"
 
 The harness creates a session, performs device discovery, issues a challenge, signs the exact canonical message with `aws kms sign`, submits the API assertion, verifies the attested response, checks the final `DEVICE_ATTESTED` state, and inspects the required migration tables without changing the database. Use `-SkipDatabaseCheck` only for an explicitly local API run; it does not bypass the application's staging startup guard.
 
+For the release acceptance gate, use `scripts/run-staging-kms-gate.ps1` instead of starting the API manually. The gate verifies the checked-out revision, rebuilds `provisioning-api.exe`, refuses to use an already-listening port, starts a fresh API process with the current environment, waits for `/healthz` and `/readyz`, runs the E2E harness, reports the API logs on failure, and stops the process on completion. Run it from the repository root with `DATABASE_URL`, `AWS_KMS_KEY_ID`, `AWS_REGION`, and the AWS credential chain configured:
+
+```powershell
+.\scripts\run-staging-kms-gate.ps1
+```
+
+Use `-SkipDatabaseCheck` only for a local diagnostic run. A successful release-gate run must include `PASS API KMS verification`, `PASS final attested response: session is DEVICE_ATTESTED`, and `PASS: Slice 3 staging acceptance gate completed successfully.`
+
 Set `AWS_KMS_KEY_ID` to enable the AWS KMS verifier. The API then accepts `provider=aws-kms` only when the submitted `key_id` exactly matches that configured key. The assertion is a base64url-encoded JSON envelope containing `signature` (base64url) and a positive `counter`; the signature covers the canonical challenge message, and the counter is protected by the existing monotonic replay policy. The runtime loads AWS credentials through the standard AWS SDK credential chain and never receives a private key.
 
 This adapter is valid only for a protocol where the signing key corresponding to the configured KMS asymmetric key is the authorized verification key. AWS KMS `Verify` cannot validate arbitrary device public keys just because their IDs are submitted. It is therefore not a replacement for Apple App Attest, Android Play Integrity, or a per-device public-key registry; those providers still require their own certified verification paths.
