@@ -23,10 +23,10 @@ type Submission struct {
 }
 
 type VerifiedResult struct {
-	Provider   string
-	KeyID      string
-	Counter    uint64
-	TrustLevel string
+	Provider   string `json:"provider"`
+	KeyID      string `json:"key_id"`
+	Counter    uint64 `json:"counter"`
+	TrustLevel string `json:"trust_level"`
 }
 
 type Verifier interface {
