@@ -49,6 +49,7 @@ $logDirectory = Join-Path ([IO.Path]::GetTempPath()) ('slice3-kms-gate-' + [guid
 $stdoutPath = Join-Path $logDirectory 'api.stdout.log'
 $stderrPath = Join-Path $logDirectory 'api.stderr.log'
 $apiProcess = $null
+$apiProcessStarted = $false
 $gateFailed = $false
 
 try {
@@ -116,7 +117,15 @@ try {
     $apiProcess = New-Object System.Diagnostics.Process
     $apiProcess.StartInfo = $startInfo
     $apiProcess.EnableRaisingEvents = $true
-    $apiProcess.Start() | Out-Null
+    try {
+        $started = $apiProcess.Start()
+    } catch {
+        Fail "could not start API executable '$apiPath': $($_.Exception.Message)"
+    }
+    if (-not $started) {
+        Fail "could not start API executable '$apiPath'"
+    }
+    $apiProcessStarted = $true
     $stdoutTask = $apiProcess.StandardOutput.ReadToEndAsync()
     $stderrTask = $apiProcess.StandardError.ReadToEndAsync()
     Register-ObjectEvent -InputObject $apiProcess -EventName Exited -Action {
@@ -173,11 +182,11 @@ catch {
     exit 1
 }
 finally {
-    if ($null -ne $apiProcess -and -not $apiProcess.HasExited -and -not $KeepApiRunning) {
+    if ($apiProcessStarted -and -not $apiProcess.HasExited -and -not $KeepApiRunning) {
         Stop-Process -Id $apiProcess.Id -Force -ErrorAction SilentlyContinue
         Write-Host "Stopped fresh API process: $($apiProcess.Id)"
     }
-    if ($KeepApiRunning) {
+    if ($KeepApiRunning -and $apiProcessStarted) {
         Write-Host "API left running by request: $($apiProcess.Id)"
         Write-Host "Logs: $stdoutPath and $stderrPath"
     } elseif (-not $gateFailed -and (Test-Path $logDirectory)) {
