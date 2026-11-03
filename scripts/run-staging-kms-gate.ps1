@@ -21,6 +21,7 @@ $logDirectory = Join-Path ([IO.Path]::GetTempPath()) ('slice3-kms-gate-' + [guid
 $stdoutPath = Join-Path $logDirectory 'api.stdout.log'
 $stderrPath = Join-Path $logDirectory 'api.stderr.log'
 $apiProcess = $null
+$gateFailed = $false
 
 try {
     New-Item -ItemType Directory -Path $logDirectory | Out-Null
@@ -98,6 +99,7 @@ try {
     Write-Host 'PASS: Slice 3 staging acceptance gate completed successfully.'
 }
 catch {
+    $gateFailed = $true
     Write-Error $_
     if (Test-Path $stdoutPath) {
         Write-Host '--- API stdout ---'
@@ -117,7 +119,9 @@ finally {
     if ($KeepApiRunning) {
         Write-Host "API left running by request: $($apiProcess.Id)"
         Write-Host "Logs: $stdoutPath and $stderrPath"
-    } elseif (Test-Path $logDirectory) {
+    } elseif (-not $gateFailed -and (Test-Path $logDirectory)) {
         Remove-Item -Recurse -Force $logDirectory -ErrorAction SilentlyContinue
+    } elseif ($gateFailed -and (Test-Path $logDirectory)) {
+        Write-Host "Preserved acceptance logs: $logDirectory"
     }
 }
