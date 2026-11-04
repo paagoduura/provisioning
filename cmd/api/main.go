@@ -95,15 +95,19 @@ func main() {
 		verifiers[attestation.KMSProvider] = attestation.KMSVerifier{Client: kms.NewFromConfig(awsConfig), KeyID: cfg.AWSKMSKeyID, Algorithm: algorithm}
 		log.Info("attestation_verifier_selected", "provider", attestation.KMSProvider, "region", cfg.AWSRegion)
 	}
-	if cfg.AppleAppID != "" || cfg.AppleRootCertificate != "" {
-		if cfg.AppleAppID == "" || cfg.AppleRootCertificate == "" {
-			log.Error("apple_app_attest_config_failed", "error", "APPLE_APP_ID and APPLE_APP_ATTEST_ROOT_CERT_FILE must be configured together")
+	if cfg.AppleAppID != "" || cfg.AppleRootCertificate != "" || cfg.AppleRootCertificatePEM != "" {
+		if cfg.AppleAppID == "" || (cfg.AppleRootCertificate == "" && cfg.AppleRootCertificatePEM == "") || (cfg.AppleRootCertificate != "" && cfg.AppleRootCertificatePEM != "") {
+			log.Error("apple_app_attest_config_failed", "error", "APPLE_APP_ID and exactly one of APPLE_APP_ATTEST_ROOT_CERT_FILE or APPLE_APP_ATTEST_ROOT_CERT_PEM must be configured")
 			os.Exit(1)
 		}
-		rootPEM, readErr := os.ReadFile(cfg.AppleRootCertificate)
-		if readErr != nil {
-			log.Error("apple_app_attest_config_failed", "error", readErr)
-			os.Exit(1)
+		rootPEM := []byte(cfg.AppleRootCertificatePEM)
+		if cfg.AppleRootCertificate != "" {
+			var readErr error
+			rootPEM, readErr = os.ReadFile(cfg.AppleRootCertificate)
+			if readErr != nil {
+				log.Error("apple_app_attest_config_failed", "error", readErr)
+				os.Exit(1)
+			}
 		}
 		root, rootErr := attestation.LoadAppleRootCertificatePEM(rootPEM)
 		if rootErr != nil {

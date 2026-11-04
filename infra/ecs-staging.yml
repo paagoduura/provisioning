@@ -14,12 +14,27 @@ Parameters:
     Type: String
   KmsKeyArn:
     Type: String
+  AppleAppID:
+    Type: String
+    Default: ''
+  AppleEnvironment:
+    Type: String
+    Default: production
+    AllowedValues: [production, sandbox, development]
+  AppleRootCertificateSecretArn:
+    Type: String
+    Default: ''
   ContainerCpu:
     Type: String
     Default: '256'
   ContainerMemory:
     Type: String
     Default: '512'
+
+Conditions:
+  HasAppleAppAttest: !And
+    - !Not [!Equals [!Ref AppleAppID, '']]
+    - !Not [!Equals [!Ref AppleRootCertificateSecretArn, '']]
 
 Resources:
   Cluster:
@@ -90,7 +105,9 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: secretsmanager:GetSecretValue
-                Resource: !Ref DatabaseSecretArn
+                Resource:
+                  - !Ref DatabaseSecretArn
+                  - !If [HasAppleAppAttest, !Ref AppleRootCertificateSecretArn, !Ref AWS::NoValue]
 
   TaskRole:
     Type: AWS::IAM::Role
@@ -139,9 +156,24 @@ Resources:
               Value: !Ref KmsKeyArn
             - Name: AWS_KMS_SIGNING_ALGORITHM
               Value: RSASSA_PKCS1_V1_5_SHA_256
+            - !If
+              - HasAppleAppAttest
+              - Name: APPLE_APP_ID
+                Value: !Ref AppleAppID
+              - !Ref AWS::NoValue
+            - !If
+              - HasAppleAppAttest
+              - Name: APPLE_APP_ATTEST_ENVIRONMENT
+                Value: !Ref AppleEnvironment
+              - !Ref AWS::NoValue
           Secrets:
             - Name: DATABASE_URL
               ValueFrom: !Ref DatabaseSecretArn
+            - !If
+              - HasAppleAppAttest
+              - Name: APPLE_APP_ATTEST_ROOT_CERT_PEM
+                ValueFrom: !Ref AppleRootCertificateSecretArn
+              - !Ref AWS::NoValue
           LogConfiguration:
             LogDriver: awslogs
             Options:

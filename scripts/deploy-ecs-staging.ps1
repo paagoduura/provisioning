@@ -7,6 +7,9 @@ param(
     [string]$DatabaseSecretName = "provisioning/staging/database-url",
     [string]$DatabaseUrl = $env:DATABASE_URL,
     [string]$KmsKeyArn = $env:AWS_KMS_KEY_ID,
+    [string]$AppleAppID = $env:APPLE_APP_ID,
+    [string]$AppleEnvironment = $(if ($env:APPLE_APP_ATTEST_ENVIRONMENT) { $env:APPLE_APP_ATTEST_ENVIRONMENT } else { "production" }),
+    [string]$AppleRootCertificateSecretArn = $env:APPLE_APP_ATTEST_ROOT_CERT_SECRET_ARN,
     [switch]$SkipImageBuild
 )
 Set-StrictMode -Version Latest
@@ -97,7 +100,10 @@ $parameters = @(
     "PublicSubnetB=$subnetB",
     "ImageUri=$imageUri",
     "DatabaseSecretArn=$secretArn",
-    "KmsKeyArn=$KmsKeyArn"
+    "KmsKeyArn=$KmsKeyArn",
+    "AppleAppID=$AppleAppID",
+    "AppleEnvironment=$AppleEnvironment",
+    "AppleRootCertificateSecretArn=$AppleRootCertificateSecretArn"
 )
 Invoke-Aws (Aws-Args @("cloudformation", "deploy", "--region", $AwsRegion, "--stack-name", $StackName, "--template-file", "infra/ecs-staging.yml", "--parameter-overrides") + $parameters + @("--capabilities", "CAPABILITY_NAMED_IAM", "--no-fail-on-empty-changeset")) | Out-Host
 

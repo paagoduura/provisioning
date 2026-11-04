@@ -39,3 +39,16 @@ func TestLoadAllowsDevelopmentWithoutDatabase(t *testing.T) {
 		t.Fatalf("development should allow the in-memory repository: %v", err)
 	}
 }
+
+func TestLoadReadsAppleConfiguration(t *testing.T) {
+	t.Setenv("APPLE_APP_ID", "TEAM.example.app")
+	t.Setenv("APPLE_APP_ATTEST_ENVIRONMENT", "sandbox")
+	t.Setenv("APPLE_APP_ATTEST_ROOT_CERT_PEM", "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AppleAppID != "TEAM.example.app" || cfg.AppleEnvironment != "sandbox" || cfg.AppleRootCertificatePEM == "" {
+		t.Fatalf("unexpected Apple configuration: %+v", cfg)
+	}
+}

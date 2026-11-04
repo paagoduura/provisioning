@@ -6,6 +6,7 @@ param(
     [string]$AwsProfile = $env:AWS_PROFILE,
     [string]$SigningAlgorithm = $(if ($env:AWS_KMS_SIGNING_ALGORITHM) { $env:AWS_KMS_SIGNING_ALGORITHM } else { "RSASSA_PKCS1_V1_5_SHA_256" }),
     [string]$DatabaseUrl = $env:DATABASE_URL,
+    [switch]$RequireAppleSchema,
     [switch]$SkipDatabaseCheck
 )
 
@@ -45,9 +46,14 @@ function Assert-RequiredTables([string]$ConnectionString) {
         Fail "psql is required for migration inspection, or rerun with -SkipDatabaseCheck"
     }
 
+    $requiredTables = @("provisioning_sessions", "audit_events", "attestation_challenges", "device_attestations", "device_key_revocations")
+    if ($RequireAppleSchema -or -not [string]::IsNullOrWhiteSpace($env:APPLE_APP_ID)) {
+        $requiredTables += "apple_app_attest_keys"
+    }
+    $tableArray = ($requiredTables | ForEach-Object { "'$_'" }) -join ","
     $query = @"
 SELECT required_table
-FROM unnest(ARRAY['provisioning_sessions','audit_events','attestation_challenges','device_attestations','device_key_revocations','apple_app_attest_keys']::text[]) AS required(required_table)
+FROM unnest(ARRAY[$tableArray]::text[]) AS required(required_table)
 WHERE to_regclass(format('public.%s', required_table)) IS NOT NULL
 ORDER BY required_table;
 "@
@@ -56,7 +62,7 @@ ORDER BY required_table;
         Fail "read-only migration inspection could not connect: $result"
     }
     $resultText = $result -join "`n"
-	foreach ($table in @("provisioning_sessions", "audit_events", "attestation_challenges", "device_attestations", "device_key_revocations", "apple_app_attest_keys")) {
+    foreach ($table in $requiredTables) {
         $pattern = "(?m)^\s*" + [regex]::Escape($table) + "\s*$"
         if ($resultText -notmatch $pattern) {
             Fail "required migration table is missing: $table"

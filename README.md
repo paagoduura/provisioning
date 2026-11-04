@@ -37,7 +37,7 @@ $env:AWS_KMS_KEY_ID = "<approved asymmetric KMS key ARN>"
 .\scripts\staging-kms-e2e.ps1
 ```
 
-The harness creates a session, performs device discovery, issues a challenge, signs the exact canonical message with `aws kms sign`, submits the API assertion, verifies the attested response, checks the final `DEVICE_ATTESTED` state, and inspects the required migration tables without changing the database. Use `-SkipDatabaseCheck` only for an explicitly local API run; it does not bypass the application's staging startup guard.
+The harness creates a session, performs device discovery, issues a challenge, signs the exact canonical message with `aws kms sign`, submits the API assertion, verifies the attested response, checks the final `DEVICE_ATTESTED` state, and inspects the required migration tables without changing the database. When `APPLE_APP_ID` is set, it also requires `apple_app_attest_keys`; use `-RequireAppleSchema` to enforce that table explicitly. Use `-SkipDatabaseCheck` only for an explicitly local API run; it does not bypass the application's staging startup guard.
 
 For the release acceptance gate, use `scripts/run-staging-kms-gate.ps1` instead of starting the API manually. The gate verifies the checked-out revision, rebuilds `provisioning-api.exe`, refuses to use an already-listening port, starts a fresh API process with the current environment, waits for `/healthz` and `/readyz`, runs the E2E harness, reports the API logs on failure, and stops the process on completion. Run it from the repository root with `DATABASE_URL`, `AWS_KMS_KEY_ID`, `AWS_REGION`, and the AWS credential chain configured:
 
@@ -74,6 +74,14 @@ The staging template intentionally uses HTTP on port 80 because no domain or ACM
 The server supports Apple App Attest through two endpoints. First, issue a normal attestation challenge and send the app's `attestationObject` to `POST /v1/provisioning-sessions/{id}/attestation-registration` with `provider=apple-app-attest`, the App Attest `key_id`, and the same `request_hash`. The server validates the CBOR object, Apple certificate chain, App ID hash, development/sandbox/production AAGUID, zero initial counter, credential ID, public-key hash, and Apple nonce extension before storing only the certified public key. Subsequent assertions go to the existing `POST /v1/provisioning-sessions/{id}/attestation` endpoint with `assertion` containing the base64url CBOR assertion object and `client_data` containing the base64url bytes of the JSON client data that the app hashed before calling `generateAssertion`. The client data must contain the exact server `challenge` and `request_hash` values.
 
 Configure the server with `APPLE_APP_ID` set to the App ID prefix plus bundle identifier, `APPLE_APP_ATTEST_ENVIRONMENT` set to `production`, `sandbox`, or `development`, and `APPLE_APP_ATTEST_ROOT_CERT_FILE` pointing to Apple's App Attest root certificate PEM. In staging and production, `DATABASE_URL` is required so registered public keys survive restarts. The verifier fails closed when any Apple configuration or durable key store is unavailable.
+
+Apply `migrations/005_apple_app_attest_keys.sql` to the staging database before enabling the provider:
+
+```powershell
+psql $env:DATABASE_URL -v ON_ERROR_STOP=1 -f .\migrations\005_apple_app_attest_keys.sql
+```
+
+For ECS, store the PEM as a Secrets Manager secret and pass its ARN as `APPLE_APP_ATTEST_ROOT_CERT_SECRET_ARN`; the deployment template injects it as `APPLE_APP_ATTEST_ROOT_CERT_PEM`, avoiding a certificate file in the image. The ECS deployment script also accepts `APPLE_APP_ID` and `APPLE_APP_ATTEST_ENVIRONMENT`. If Apple variables are omitted, the Apple provider remains disabled and the existing KMS path is unaffected.
 
 The implementation follows Apple's [server validation guide](https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server) and [attestation object validation guide](https://developer.apple.com/documentation/devicecheck/attestation-object-validation-guide). A real Apple App ID, Apple root certificate file, iOS client using `DCAppAttestService`, and sandbox or production device fixture are still required to activate and exercise the path end to end. Sandbox keys and receipts cannot be reused in production.
 
