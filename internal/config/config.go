@@ -12,6 +12,7 @@ type Config struct {
 	Environment            string
 	LogLevel               string
 	DatabaseURL            string
+	AttestationProvider    string
 	AWSRegion              string
 	AWSKMSKeyID            string
 	AWSKMSSigningAlgorithm string
@@ -28,7 +29,11 @@ func Load() (Config, error) {
 	if err != nil || shutdownSeconds < 1 {
 		return Config{}, errors.New("SHUTDOWN_TIMEOUT_SECONDS must be a positive integer")
 	}
-	cfg := Config{HTTPAddr: getenv("HTTP_ADDR", ":8080"), Environment: getenv("ENVIRONMENT", "development"), LogLevel: getenv("LOG_LEVEL", "info"), DatabaseURL: os.Getenv("DATABASE_URL"), AWSRegion: getenv("AWS_REGION", "eu-north-1"), AWSKMSKeyID: os.Getenv("AWS_KMS_KEY_ID"), AWSKMSSigningAlgorithm: getenv("AWS_KMS_SIGNING_ALGORITHM", "RSASSA_PKCS1_V1_5_SHA_256"), MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second}
+	provider := getenv("ATTESTATION_PROVIDER", "")
+	if provider == "" && os.Getenv("AWS_KMS_KEY_ID") != "" {
+		provider = "aws-kms"
+	}
+	cfg := Config{HTTPAddr: getenv("HTTP_ADDR", ":8080"), Environment: getenv("ENVIRONMENT", "development"), LogLevel: getenv("LOG_LEVEL", "info"), DatabaseURL: os.Getenv("DATABASE_URL"), AttestationProvider: provider, AWSRegion: getenv("AWS_REGION", "eu-north-1"), AWSKMSKeyID: os.Getenv("AWS_KMS_KEY_ID"), AWSKMSSigningAlgorithm: getenv("AWS_KMS_SIGNING_ALGORITHM", "RSASSA_PKCS1_V1_5_SHA_256"), MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second}
 	if cfg.HTTPAddr == "" {
 		return Config{}, errors.New("HTTP_ADDR must not be empty")
 	}
@@ -40,6 +45,17 @@ func Load() (Config, error) {
 	}
 	if cfg.AWSRegion == "" {
 		return Config{}, errors.New("AWS_REGION must not be empty")
+	}
+	switch cfg.AttestationProvider {
+	case "", "aws-kms", "apple-app-attest", "google-play-integrity", "cloudhsm-pkcs11":
+	default:
+		return Config{}, errors.New("ATTESTATION_PROVIDER must be one of aws-kms, apple-app-attest, google-play-integrity, cloudhsm-pkcs11")
+	}
+	if (cfg.Environment == "staging" || cfg.Environment == "production") && cfg.AttestationProvider == "" {
+		return Config{}, errors.New("ATTESTATION_PROVIDER is required for staging and production")
+	}
+	if cfg.AttestationProvider == "aws-kms" && cfg.AWSKMSKeyID == "" {
+		return Config{}, errors.New("AWS_KMS_KEY_ID is required when ATTESTATION_PROVIDER=aws-kms")
 	}
 	return cfg, nil
 }

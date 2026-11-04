@@ -77,7 +77,8 @@ func main() {
 	}
 	provisioning := service.New(repo, mock.CryptoService{}, mock.InterswitchAdapter{}, auditSink)
 	var verifier attestation.Verifier = attestation.UnavailableVerifier{}
-	if cfg.AWSKMSKeyID != "" {
+	switch cfg.AttestationProvider {
+	case "aws-kms":
 		algorithm, algorithmErr := attestation.ParseKMSAlgorithm(cfg.AWSKMSSigningAlgorithm)
 		if algorithmErr != nil {
 			log.Error("kms_config_failed", "error", algorithmErr)
@@ -90,8 +91,10 @@ func main() {
 		}
 		verifier = attestation.KMSVerifier{Client: kms.NewFromConfig(awsConfig), KeyID: cfg.AWSKMSKeyID, Algorithm: algorithm}
 		log.Info("attestation_verifier_selected", "provider", attestation.KMSProvider, "region", cfg.AWSRegion, "algorithm", cfg.AWSKMSSigningAlgorithm)
-	} else {
-		log.Warn("attestation_verifier_selected", "provider", "unavailable", "warning", "set AWS_KMS_KEY_ID or configure the HSM adapter before production use")
+	case "apple-app-attest", "google-play-integrity", "cloudhsm-pkcs11":
+		log.Error("attestation_verifier_unavailable", "provider", cfg.AttestationProvider, "error", "provider adapter and external trust configuration are not installed")
+	default:
+		log.Warn("attestation_verifier_selected", "provider", "unavailable", "warning", "set ATTESTATION_PROVIDER and configure its approved verifier before production use")
 	}
 	attestationService := attestation.New(attestationRepo, attestationRecords, verifier, provisioning, auditSink)
 	attestationService.SetRevocationChecker(revocationChecker)

@@ -19,9 +19,10 @@
 | Failure reason mapping | Complete | Stable `failure_code` values and status mapping at API boundary |
 | Verification-data log redaction | Complete | Assertions/challenges are absent from HTTP logs; audit stores reason codes only |
 | Fail-closed production behavior | Complete | Unconfigured Apple/Android provider returns `501 Not Implemented` |
+| Explicit provider selection | Complete | `ATTESTATION_PROVIDER` is required in staging/production; unsupported providers cannot fall back to KMS or development verification |
 | HSM verification boundary | Complete, fail-closed | HSM-only port and delegation tests; unavailable HSM returns `503` |
 | AWS KMS-backed production verification | Complete at adapter boundary | Asymmetric `SIGN_VERIFY` KMS adapter, exact key binding, allowlisted algorithm, signed counter envelope, AWS SDK credential chain, and fail-closed configuration |
-| AWS KMS production activation | Blocked by external prerequisite | Requires an approved asymmetric KMS key, IAM `kms:Verify` permission scoped to that key, deployment credentials, and a real-device assertion fixture |
+| AWS KMS production activation | Blocked by external prerequisite | Staging key and live cryptographic path are available; production still requires approved key policy, IAM `kms:Verify` scope, deployment credentials, and an approved assertion fixture |
 | CloudHSM-backed production verification | Blocked by external prerequisite | Requires approved PKCS#11 client adapter, cluster networking, crypto-user secret handling, key registry, and HSM operational controls |
 | Development test provider | Complete | Explicit Ed25519-only verifier, not a platform trust substitute |
 | Genuine Apple/Android devices pass | Blocked by external prerequisite | Requires real provider verifiers, app identities, vendor credentials, and device fixtures |
