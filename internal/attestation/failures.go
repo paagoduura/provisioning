@@ -12,6 +12,11 @@ const (
 	FailureDeviceRevoked       = "ATTESTATION_DEVICE_REVOKED"
 	FailureProviderUnavailable = "ATTESTATION_PROVIDER_UNAVAILABLE"
 	FailureHSMUnavailable      = "ATTESTATION_HSM_UNAVAILABLE"
+	FailureAndroidToken        = "ATTESTATION_ANDROID_TOKEN_INVALID"
+	FailureAndroidRequest      = "ATTESTATION_ANDROID_REQUEST_MISMATCH"
+	FailureAndroidPackage      = "ATTESTATION_ANDROID_PACKAGE_MISMATCH"
+	FailureAndroidFreshness    = "ATTESTATION_ANDROID_TOKEN_NOT_FRESH"
+	FailureAndroidVerdict      = "ATTESTATION_ANDROID_VERDICT_REJECTED"
 	FailureVerification        = "ATTESTATION_VERIFICATION_FAILED"
 	FailurePersistence         = "ATTESTATION_PERSISTENCE_FAILED"
 )
@@ -36,6 +41,16 @@ func FailureCode(err error) string {
 		return FailureProviderUnavailable
 	case errors.Is(err, ErrHSMUnavailable):
 		return FailureHSMUnavailable
+	case errors.Is(err, ErrAndroidInvalidToken), errors.Is(err, ErrAndroidDecodeFailed):
+		return FailureAndroidToken
+	case errors.Is(err, ErrAndroidRequestMismatch):
+		return FailureAndroidRequest
+	case errors.Is(err, ErrAndroidPackageMismatch):
+		return FailureAndroidPackage
+	case errors.Is(err, ErrAndroidTokenExpired):
+		return FailureAndroidFreshness
+	case errors.Is(err, ErrAndroidAppUnrecognized), errors.Is(err, ErrAndroidAccountUnlicensed), errors.Is(err, ErrAndroidDeviceIntegrity):
+		return FailureAndroidVerdict
 	default:
 		return FailureVerification
 	}

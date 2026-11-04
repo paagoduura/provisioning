@@ -10,6 +10,10 @@ param(
     [string]$AppleAppID = $env:APPLE_APP_ID,
     [string]$AppleEnvironment = $(if ($env:APPLE_APP_ATTEST_ENVIRONMENT) { $env:APPLE_APP_ATTEST_ENVIRONMENT } else { "production" }),
     [string]$AppleRootCertificateSecretArn = $env:APPLE_APP_ATTEST_ROOT_CERT_SECRET_ARN,
+    [string]$AndroidPackageName = $env:ANDROID_PACKAGE_NAME,
+    [string]$AndroidCloudProjectNumber = $env:ANDROID_PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER,
+    [string]$AndroidMode = $(if ($env:ANDROID_PLAY_INTEGRITY_MODE) { $env:ANDROID_PLAY_INTEGRITY_MODE } else { "standard" }),
+    [string]$AndroidServiceAccountSecretArn = $env:ANDROID_PLAY_INTEGRITY_SERVICE_ACCOUNT_SECRET_ARN,
     [switch]$SkipImageBuild
 )
 Set-StrictMode -Version Latest
@@ -103,7 +107,11 @@ $parameters = @(
     "KmsKeyArn=$KmsKeyArn",
     "AppleAppID=$AppleAppID",
     "AppleEnvironment=$AppleEnvironment",
-    "AppleRootCertificateSecretArn=$AppleRootCertificateSecretArn"
+    "AppleRootCertificateSecretArn=$AppleRootCertificateSecretArn",
+    "AndroidPackageName=$AndroidPackageName",
+    "AndroidCloudProjectNumber=$AndroidCloudProjectNumber",
+    "AndroidMode=$AndroidMode",
+    "AndroidServiceAccountSecretArn=$AndroidServiceAccountSecretArn"
 )
 Invoke-Aws (Aws-Args @("cloudformation", "deploy", "--region", $AwsRegion, "--stack-name", $StackName, "--template-file", "infra/ecs-staging.yml", "--parameter-overrides") + $parameters + @("--capabilities", "CAPABILITY_NAMED_IAM", "--no-fail-on-empty-changeset")) | Out-Host
 

@@ -85,6 +85,14 @@ For ECS, store the PEM as a Secrets Manager secret and pass its ARN as `APPLE_AP
 
 The implementation follows Apple's [server validation guide](https://developer.apple.com/documentation/devicecheck/validating-apps-that-connect-to-your-server) and [attestation object validation guide](https://developer.apple.com/documentation/devicecheck/attestation-object-validation-guide). A real Apple App ID, Apple root certificate file, iOS client using `DCAppAttestService`, and sandbox or production device fixture are still required to activate and exercise the path end to end. Sandbox keys and receipts cannot be reused in production.
 
+## Android Play Integrity
+
+The server supports Android Play Integrity standard and classic verdicts through the existing attestation endpoint with `provider=android-play-integrity`. The Android client sends Google's opaque integrity token as `assertion`. The backend never parses or trusts that opaque value locally; it sends the token to Google's `decodeIntegrityToken` endpoint using a short-lived OAuth access token created from a runtime-only service-account credential. It then verifies the returned request package, request hash or classic nonce, timestamp freshness, `PLAY_RECOGNIZED` app verdict, package identity, `LICENSED` account verdict, and the configured device-integrity policy.
+
+Enable the provider by setting `ANDROID_PACKAGE_NAME`, `ANDROID_PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER`, and `ANDROID_PLAY_INTEGRITY_SERVICE_ACCOUNT_JSON`. The cloud project number is a required configuration invariant for the same Google Cloud project used by the Android client; the service-account JSON must be injected by a secret manager and must never be committed. `ANDROID_PLAY_INTEGRITY_MODE` defaults to `standard`; `ANDROID_PLAY_INTEGRITY_ALLOWED_DEVICE_VERDICTS` defaults to `MEETS_DEVICE_INTEGRITY`; and `ANDROID_PLAY_INTEGRITY_REQUIRE_LICENSED` defaults to `true`. The provider is disabled when these core values are omitted and fails closed when only part of the configuration is present.
+
+Google's standard API uses `requestHash` to bind a verdict to the protected request and provides automatic replay mitigation. Classic mode binds the verdict to the one-time server challenge through the `nonce` field. The server applies a two-minute default freshness window with a small clock-skew allowance and never stores the raw token. See Google's [standard request guidance](https://developer.android.com/google/play/integrity/standard), [verdict format](https://developer.android.com/google/play/integrity/verdicts), and [API overview](https://developer.android.com/google/play/integrity/overview) before enabling a real Android client.
+
 ```bash
 curl http://localhost:8080/healthz
 curl -X POST http://localhost:8080/v1/provisioning-sessions \\
@@ -100,8 +108,7 @@ The mobile app must never receive manufacturer master keys, HSM credentials, raw
 ## Next implementation slices
 
 1. OAuth/OIDC authentication and app/device identity integration
-2. Android Play Integrity verifier with Google Cloud configuration
-3. Real device registry and lifecycle controls
-4. HSM-backed Crypto Service over mTLS
-5. Interswitch sandbox adapter with signed webhooks
-6. Hardware-in-the-loop APDU contract tests
+2. Real device registry and lifecycle controls
+3. HSM-backed Crypto Service over mTLS
+4. Interswitch sandbox adapter with signed webhooks
+5. Hardware-in-the-loop APDU contract tests

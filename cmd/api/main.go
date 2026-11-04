@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/paagoduura/provisioning/internal/config"
 	httpapi "github.com/paagoduura/provisioning/internal/httpapi"
 	"github.com/paagoduura/provisioning/internal/service"
+	"golang.org/x/oauth2/google"
 )
 
 func main() {
@@ -122,6 +124,29 @@ func main() {
 		}
 		verifiers[attestation.AppleAppAttestProvider] = attestation.AppleAppAttestVerifier{AppID: cfg.AppleAppID, Environment: cfg.AppleEnvironment, AppleRoot: root, Keys: appleKeys}
 		log.Info("attestation_verifier_selected", "provider", attestation.AppleAppAttestProvider, "environment", cfg.AppleEnvironment)
+	}
+	if cfg.AndroidPackageName != "" || cfg.AndroidCloudProject != 0 || cfg.AndroidServiceAccount != "" {
+		oauthConfig, oauthErr := google.JWTConfigFromJSON([]byte(cfg.AndroidServiceAccount), "https://www.googleapis.com/auth/playintegrity")
+		if oauthErr != nil {
+			log.Error("android_play_integrity_config_failed", "error", oauthErr)
+			os.Exit(1)
+		}
+		allowed := make(map[string]struct{})
+		for _, verdict := range strings.Split(cfg.AndroidAllowedVerdicts, ",") {
+			if verdict = strings.TrimSpace(verdict); verdict != "" {
+				allowed[verdict] = struct{}{}
+			}
+		}
+		verifiers[attestation.AndroidPlayIntegrityProvider] = attestation.AndroidPlayIntegrityVerifier{
+			PackageName:           cfg.AndroidPackageName,
+			CloudProjectNumber:    cfg.AndroidCloudProject,
+			Mode:                  attestation.PlayIntegrityMode(cfg.AndroidMode),
+			MaxTokenAge:           cfg.AndroidMaxTokenAge,
+			RequireLicensed:       cfg.AndroidRequireLicensed,
+			AllowedDeviceVerdicts: allowed,
+			Decoder:               attestation.GooglePlayIntegrityClient{PackageName: cfg.AndroidPackageName, TokenSource: oauthConfig.TokenSource(context.Background())},
+		}
+		log.Info("attestation_verifier_selected", "provider", attestation.AndroidPlayIntegrityProvider, "package_name", cfg.AndroidPackageName, "mode", cfg.AndroidMode, "cloud_project_configured", true)
 	}
 	if len(verifiers) == 0 {
 		log.Warn("attestation_verifier_selected", "provider", "unavailable", "warning", "configure AWS KMS or Apple App Attest before production use")

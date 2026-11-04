@@ -24,6 +24,19 @@ Parameters:
   AppleRootCertificateSecretArn:
     Type: String
     Default: ''
+  AndroidPackageName:
+    Type: String
+    Default: ''
+  AndroidCloudProjectNumber:
+    Type: String
+    Default: ''
+  AndroidMode:
+    Type: String
+    Default: standard
+    AllowedValues: [standard, classic]
+  AndroidServiceAccountSecretArn:
+    Type: String
+    Default: ''
   ContainerCpu:
     Type: String
     Default: '256'
@@ -35,6 +48,10 @@ Conditions:
   HasAppleAppAttest: !And
     - !Not [!Equals [!Ref AppleAppID, '']]
     - !Not [!Equals [!Ref AppleRootCertificateSecretArn, '']]
+  HasAndroidPlayIntegrity: !And
+    - !Not [!Equals [!Ref AndroidPackageName, '']]
+    - !Not [!Equals [!Ref AndroidCloudProjectNumber, '']]
+    - !Not [!Equals [!Ref AndroidServiceAccountSecretArn, '']]
 
 Resources:
   Cluster:
@@ -108,6 +125,7 @@ Resources:
                 Resource:
                   - !Ref DatabaseSecretArn
                   - !If [HasAppleAppAttest, !Ref AppleRootCertificateSecretArn, !Ref AWS::NoValue]
+                  - !If [HasAndroidPlayIntegrity, !Ref AndroidServiceAccountSecretArn, !Ref AWS::NoValue]
 
   TaskRole:
     Type: AWS::IAM::Role
@@ -166,6 +184,21 @@ Resources:
               - Name: APPLE_APP_ATTEST_ENVIRONMENT
                 Value: !Ref AppleEnvironment
               - !Ref AWS::NoValue
+            - !If
+              - HasAndroidPlayIntegrity
+              - Name: ANDROID_PACKAGE_NAME
+                Value: !Ref AndroidPackageName
+              - !Ref AWS::NoValue
+            - !If
+              - HasAndroidPlayIntegrity
+              - Name: ANDROID_PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER
+                Value: !Ref AndroidCloudProjectNumber
+              - !Ref AWS::NoValue
+            - !If
+              - HasAndroidPlayIntegrity
+              - Name: ANDROID_PLAY_INTEGRITY_MODE
+                Value: !Ref AndroidMode
+              - !Ref AWS::NoValue
           Secrets:
             - Name: DATABASE_URL
               ValueFrom: !Ref DatabaseSecretArn
@@ -173,6 +206,11 @@ Resources:
               - HasAppleAppAttest
               - Name: APPLE_APP_ATTEST_ROOT_CERT_PEM
                 ValueFrom: !Ref AppleRootCertificateSecretArn
+              - !Ref AWS::NoValue
+            - !If
+              - HasAndroidPlayIntegrity
+              - Name: ANDROID_PLAY_INTEGRITY_SERVICE_ACCOUNT_JSON
+                ValueFrom: !Ref AndroidServiceAccountSecretArn
               - !Ref AWS::NoValue
           LogConfiguration:
             LogDriver: awslogs

@@ -20,6 +20,13 @@ type Config struct {
 	AppleEnvironment        string
 	AppleRootCertificate    string
 	AppleRootCertificatePEM string
+	AndroidPackageName      string
+	AndroidCloudProject     uint64
+	AndroidMode             string
+	AndroidMaxTokenAge      time.Duration
+	AndroidAllowedVerdicts  string
+	AndroidRequireLicensed  bool
+	AndroidServiceAccount   string
 	MaxRequestBodyBytes     int64
 	ShutdownTimeout         time.Duration
 }
@@ -33,7 +40,19 @@ func Load() (Config, error) {
 	if err != nil || shutdownSeconds < 1 {
 		return Config{}, errors.New("SHUTDOWN_TIMEOUT_SECONDS must be a positive integer")
 	}
-	cfg := Config{HTTPAddr: getenv("HTTP_ADDR", ":8080"), Environment: getenv("ENVIRONMENT", "development"), LogLevel: getenv("LOG_LEVEL", "info"), DatabaseURL: os.Getenv("DATABASE_URL"), AWSRegion: getenv("AWS_REGION", "eu-north-1"), AWSKMSKeyID: os.Getenv("AWS_KMS_KEY_ID"), AWSKMSSigningAlgorithm: getenv("AWS_KMS_SIGNING_ALGORITHM", "RSASSA_PKCS1_V1_5_SHA_256"), AppleAppID: os.Getenv("APPLE_APP_ID"), AppleEnvironment: getenv("APPLE_APP_ATTEST_ENVIRONMENT", "production"), AppleRootCertificate: os.Getenv("APPLE_APP_ATTEST_ROOT_CERT_FILE"), AppleRootCertificatePEM: os.Getenv("APPLE_APP_ATTEST_ROOT_CERT_PEM"), MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second}
+	androidProject, err := uint64Env("ANDROID_PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER", 0)
+	if err != nil {
+		return Config{}, err
+	}
+	androidMaxAgeSeconds, err := int64Env("ANDROID_PLAY_INTEGRITY_MAX_TOKEN_AGE_SECONDS", 120)
+	if err != nil || androidMaxAgeSeconds < 1 {
+		return Config{}, errors.New("ANDROID_PLAY_INTEGRITY_MAX_TOKEN_AGE_SECONDS must be a positive integer")
+	}
+	androidRequireLicensed, err := strconv.ParseBool(getenv("ANDROID_PLAY_INTEGRITY_REQUIRE_LICENSED", "true"))
+	if err != nil {
+		return Config{}, errors.New("ANDROID_PLAY_INTEGRITY_REQUIRE_LICENSED must be true or false")
+	}
+	cfg := Config{HTTPAddr: getenv("HTTP_ADDR", ":8080"), Environment: getenv("ENVIRONMENT", "development"), LogLevel: getenv("LOG_LEVEL", "info"), DatabaseURL: os.Getenv("DATABASE_URL"), AWSRegion: getenv("AWS_REGION", "eu-north-1"), AWSKMSKeyID: os.Getenv("AWS_KMS_KEY_ID"), AWSKMSSigningAlgorithm: getenv("AWS_KMS_SIGNING_ALGORITHM", "RSASSA_PKCS1_V1_5_SHA_256"), AppleAppID: os.Getenv("APPLE_APP_ID"), AppleEnvironment: getenv("APPLE_APP_ATTEST_ENVIRONMENT", "production"), AppleRootCertificate: os.Getenv("APPLE_APP_ATTEST_ROOT_CERT_FILE"), AppleRootCertificatePEM: os.Getenv("APPLE_APP_ATTEST_ROOT_CERT_PEM"), AndroidPackageName: os.Getenv("ANDROID_PACKAGE_NAME"), AndroidCloudProject: androidProject, AndroidMode: getenv("ANDROID_PLAY_INTEGRITY_MODE", "standard"), AndroidMaxTokenAge: time.Duration(androidMaxAgeSeconds) * time.Second, AndroidAllowedVerdicts: getenv("ANDROID_PLAY_INTEGRITY_ALLOWED_DEVICE_VERDICTS", "MEETS_DEVICE_INTEGRITY"), AndroidRequireLicensed: androidRequireLicensed, AndroidServiceAccount: os.Getenv("ANDROID_PLAY_INTEGRITY_SERVICE_ACCOUNT_JSON"), MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second}
 	if cfg.HTTPAddr == "" {
 		return Config{}, errors.New("HTTP_ADDR must not be empty")
 	}
@@ -45,6 +64,14 @@ func Load() (Config, error) {
 	}
 	if strings.EqualFold(strings.TrimSpace(cfg.Environment), "staging") && strings.TrimSpace(cfg.DatabaseURL) == "" {
 		return Config{}, errors.New("DATABASE_URL is required when ENVIRONMENT=staging; in-memory persistence is development-only")
+	}
+	if cfg.AndroidPackageName != "" || cfg.AndroidCloudProject != 0 || cfg.AndroidServiceAccount != "" {
+		if cfg.AndroidPackageName == "" || cfg.AndroidCloudProject == 0 || cfg.AndroidServiceAccount == "" {
+			return Config{}, errors.New("ANDROID_PACKAGE_NAME, ANDROID_PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER, and ANDROID_PLAY_INTEGRITY_SERVICE_ACCOUNT_JSON must be configured together")
+		}
+		if cfg.AndroidMode != "standard" && cfg.AndroidMode != "classic" {
+			return Config{}, errors.New("ANDROID_PLAY_INTEGRITY_MODE must be standard or classic")
+		}
 	}
 	return cfg, nil
 }
@@ -58,4 +85,9 @@ func getenv(key, fallback string) string {
 func int64Env(key string, fallback int64) (int64, error) {
 	v := getenv(key, strconv.FormatInt(fallback, 10))
 	return strconv.ParseInt(v, 10, 64)
+}
+
+func uint64Env(key string, fallback uint64) (uint64, error) {
+	v := getenv(key, strconv.FormatUint(fallback, 10))
+	return strconv.ParseUint(v, 10, 64)
 }
