@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/oauth2"
 )
@@ -135,5 +136,22 @@ func TestGooglePlayIntegrityVerifierMapsDecodeEndpointFailureToUnavailable(t *te
 	})
 	if !errors.Is(err, ErrGooglePlayUnavailable) {
 		t.Fatalf("expected provider unavailable error, got %v", err)
+	}
+}
+
+func TestGooglePlayIntegrityVerifierRejectsStaleVerdict(t *testing.T) {
+	server, verifier := newGoogleVerifierServer(t, googleVerdictJSON("request-hash-1", verifierPackageName), http.StatusOK, nil)
+	defer server.Close()
+	verifier.MaxTokenAge = 5 * time.Minute
+	verifier.Clock = func() time.Time {
+		return time.UnixMilli(1730000000000).Add(6 * time.Minute)
+	}
+	_, err := verifier.Verify(context.Background(), Challenge{}, Submission{
+		Provider:    GooglePlayIntegrityProvider,
+		Assertion:   googleAssertion(t, "opaque-token"),
+		RequestHash: "request-hash-1",
+	})
+	if !errors.Is(err, ErrGooglePlayInvalidVerdict) {
+		t.Fatalf("expected stale verdict rejection, got %v", err)
 	}
 }

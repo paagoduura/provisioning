@@ -33,6 +33,8 @@ type GooglePlayIntegrityVerifier struct {
 	RequireLicensed            bool
 	AllowedDeviceVerdicts      map[string]struct{}
 	Clock                      func() time.Time
+	MaxTokenAge                time.Duration
+	MaxClockSkew               time.Duration
 }
 
 type googlePlayAssertion struct {
@@ -134,6 +136,20 @@ func (v GooglePlayIntegrityVerifier) Verify(ctx context.Context, _ Challenge, in
 	counter := parseGoogleTimestamp(payload.RequestDetails.TimestampMillis)
 	if counter == 0 {
 		return VerifiedResult{}, ErrGooglePlayInvalidVerdict
+	}
+	if v.MaxTokenAge > 0 {
+		now := time.Now()
+		if v.Clock != nil {
+			now = v.Clock()
+		}
+		clockSkew := v.MaxClockSkew
+		if clockSkew <= 0 {
+			clockSkew = 30 * time.Second
+		}
+		issuedAt := time.UnixMilli(int64(counter))
+		if issuedAt.After(now.Add(clockSkew)) || now.Sub(issuedAt) > v.MaxTokenAge {
+			return VerifiedResult{}, ErrGooglePlayInvalidVerdict
+		}
 	}
 	return VerifiedResult{Provider: input.Provider, KeyID: input.KeyID, Counter: counter, TrustLevel: "google-play-integrity-verified"}, nil
 }

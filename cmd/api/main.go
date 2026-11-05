@@ -100,7 +100,7 @@ func main() {
 				os.Exit(1)
 			}
 		}
-		verifier = attestation.GooglePlayIntegrityVerifier{Client: http.DefaultClient, CredentialsJSON: credentials, PackageName: cfg.GooglePlayPackageName, RequireLicensed: cfg.GooglePlayRequireLicensed}
+		verifier = attestation.GooglePlayIntegrityVerifier{Client: http.DefaultClient, CredentialsJSON: credentials, PackageName: cfg.GooglePlayPackageName, RequireLicensed: cfg.GooglePlayRequireLicensed, MaxTokenAge: 5 * time.Minute, MaxClockSkew: 30 * time.Second}
 		log.Info("attestation_verifier_selected", "provider", attestation.GooglePlayIntegrityProvider, "package_name", cfg.GooglePlayPackageName)
 	case "apple-app-attest", "cloudhsm-pkcs11":
 		log.Error("attestation_verifier_unavailable", "provider", cfg.AttestationProvider, "error", "provider adapter and external trust configuration are not installed")

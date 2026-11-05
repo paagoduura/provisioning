@@ -34,6 +34,8 @@ To enable the Google Play Integrity adapter, set `ATTESTATION_PROVIDER=google-pl
 
 This repository change does not enable APIs, create service accounts, alter IAM, link Play Console, or access Google Cloud resources. Those operations remain an external deployment step. Until the Google project is linked to the Android application and valid production token fixtures are supplied, the provider must remain fail-closed in staging and production.
 
+For a non-mutating Windows check of the external prerequisites, run `powershell -ExecutionPolicy Bypass -File scripts/google-play-integrity-preflight.ps1 -ProjectId <project-id> -PackageName <package-name> -CredentialsFile <secret-file>`. The script only reads project metadata and service-account inventory; it never enables APIs, creates accounts, changes IAM, displays key material, or changes Play Console.
+
 This adapter is valid only for a protocol where the signing key corresponding to the configured KMS asymmetric key is the authorized verification key. AWS KMS `Verify` cannot validate arbitrary device public keys just because their IDs are submitted. It is therefore not a replacement for Apple App Attest, Android Play Integrity, or a per-device public-key registry; those providers still require their own certified verification paths.
 
 AWS KMS must use an asymmetric `SIGN_VERIFY` key whose signing algorithm matches `AWS_KMS_SIGNING_ALGORITHM`. CloudHSM is not silently substituted: a direct CloudHSM deployment requires the separately approved PKCS#11 adapter, cluster networking, crypto-user secret handling, key registry, and HSM operational controls. Until that adapter is configured, the service remains fail-closed.
