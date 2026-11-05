@@ -3,20 +3,23 @@ package attestation
 import "errors"
 
 const (
-	FailureInvalidRequest      = "ATTESTATION_INVALID_REQUEST"
-	FailureChallengeNotFound   = "ATTESTATION_CHALLENGE_NOT_FOUND"
-	FailureChallengeExpired    = "ATTESTATION_CHALLENGE_EXPIRED"
-	FailureChallengeUsed       = "ATTESTATION_CHALLENGE_REPLAY"
-	FailureRequestBinding      = "ATTESTATION_REQUEST_BINDING_MISMATCH"
-	FailureCounterRollback     = "ATTESTATION_COUNTER_ROLLBACK"
-	FailureDeviceRevoked       = "ATTESTATION_DEVICE_REVOKED"
-	FailureProviderUnavailable = "ATTESTATION_PROVIDER_UNAVAILABLE"
-	FailureHSMUnavailable      = "ATTESTATION_HSM_UNAVAILABLE"
-	FailureVerification        = "ATTESTATION_VERIFICATION_FAILED"
-	FailureKMSKeyMismatch      = "ATTESTATION_KMS_KEY_MISMATCH"
-	FailureKMSInvalidAssertion = "ATTESTATION_KMS_INVALID_ASSERTION"
-	FailureKMSInvalidSignature = "ATTESTATION_KMS_SIGNATURE_INVALID"
-	FailurePersistence         = "ATTESTATION_PERSISTENCE_FAILED"
+	FailureInvalidRequest       = "ATTESTATION_INVALID_REQUEST"
+	FailureChallengeNotFound    = "ATTESTATION_CHALLENGE_NOT_FOUND"
+	FailureChallengeExpired     = "ATTESTATION_CHALLENGE_EXPIRED"
+	FailureChallengeUsed        = "ATTESTATION_CHALLENGE_REPLAY"
+	FailureRequestBinding       = "ATTESTATION_REQUEST_BINDING_MISMATCH"
+	FailureCounterRollback      = "ATTESTATION_COUNTER_ROLLBACK"
+	FailureDeviceRevoked        = "ATTESTATION_DEVICE_REVOKED"
+	FailureProviderUnavailable  = "ATTESTATION_PROVIDER_UNAVAILABLE"
+	FailureHSMUnavailable       = "ATTESTATION_HSM_UNAVAILABLE"
+	FailureVerification         = "ATTESTATION_VERIFICATION_FAILED"
+	FailureKMSKeyMismatch       = "ATTESTATION_KMS_KEY_MISMATCH"
+	FailureKMSInvalidAssertion  = "ATTESTATION_KMS_INVALID_ASSERTION"
+	FailureKMSInvalidSignature  = "ATTESTATION_KMS_SIGNATURE_INVALID"
+	FailureGoogleUnavailable    = "ATTESTATION_GOOGLE_PLAY_UNAVAILABLE"
+	FailureGoogleInvalidToken   = "ATTESTATION_GOOGLE_PLAY_INVALID_TOKEN"
+	FailureGoogleInvalidVerdict = "ATTESTATION_GOOGLE_PLAY_VERDICT_INVALID"
+	FailurePersistence          = "ATTESTATION_PERSISTENCE_FAILED"
 )
 
 func FailureCode(err error) string {
@@ -45,6 +48,12 @@ func FailureCode(err error) string {
 		return FailureKMSInvalidAssertion
 	case errors.Is(err, ErrKMSInvalidSignature):
 		return FailureKMSInvalidSignature
+	case errors.Is(err, ErrGooglePlayUnavailable):
+		return FailureGoogleUnavailable
+	case errors.Is(err, ErrGooglePlayInvalidAssertion):
+		return FailureGoogleInvalidToken
+	case errors.Is(err, ErrGooglePlayInvalidVerdict):
+		return FailureGoogleInvalidVerdict
 	default:
 		return FailureVerification
 	}

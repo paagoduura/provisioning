@@ -10,6 +10,7 @@ A security-first backend foundation for wearable secure-element provisioning. Th
 - Slice 3 attestation orchestration with one-time challenges, request binding, replay protection, and counter checks
 - Durable device-key revocation checks, typed failure codes, redacted audit events, and an HSM-only verification port
 - AWS KMS asymmetric verification adapter; KMS keeps the verification key under AWS HSM protection and is enabled only with an exact configured key ID
+- Google Play Integrity decode adapter with OAuth service-account authentication, package/request-hash binding, app-recognition, licensing, certificate-digest, and device-integrity policy checks
 - Mock Crypto/HSM and Interswitch adapters; **no real payment or key operations**
 - Health and readiness endpoints
 - PostgreSQL schema for the production persistence boundary
@@ -28,6 +29,10 @@ Set `DATABASE_URL` to the Supabase connection string to use durable PostgreSQL s
 When `ENVIRONMENT=staging` or `ENVIRONMENT=production`, `DATABASE_URL` is mandatory and startup fails closed rather than using memory persistence. Apply `migrations/001_init.sql` through `migrations/005_attestation_request_hash_value.sql` to the target Supabase project before starting the service.
 
 Set `AWS_KMS_KEY_ID` to enable the AWS KMS verifier. The API then accepts `provider=aws-kms` only when the submitted `key_id` exactly matches that configured key. The assertion is a base64url-encoded JSON envelope containing `signature` (base64url) and a positive `counter`; the signature covers the canonical challenge message, and the counter is protected by the existing monotonic replay policy. The runtime loads AWS credentials through the standard AWS SDK credential chain and never receives a private key.
+
+To enable the Google Play Integrity adapter, set `ATTESTATION_PROVIDER=google-play-integrity`, `GOOGLE_PLAY_INTEGRITY_PACKAGE_NAME` to the exact Android package name, and either `GOOGLE_PLAY_INTEGRITY_CREDENTIALS_FILE` to a secret-mounted service-account JSON file or `GOOGLE_PLAY_INTEGRITY_CREDENTIALS_JSON` from a protected secret store. The submitted assertion is a base64url-encoded JSON envelope containing the opaque `integrity_token`. The backend sends it to Google’s decode endpoint and validates the package name, request hash, `PLAY_RECOGNIZED` app verdict, licensing when required, configured certificate digest, and allowed device-integrity verdict. Service-account keys must not be committed or printed.
+
+This repository change does not enable APIs, create service accounts, alter IAM, link Play Console, or access Google Cloud resources. Those operations remain an external deployment step. Until the Google project is linked to the Android application and valid production token fixtures are supplied, the provider must remain fail-closed in staging and production.
 
 This adapter is valid only for a protocol where the signing key corresponding to the configured KMS asymmetric key is the authorized verification key. AWS KMS `Verify` cannot validate arbitrary device public keys just because their IDs are submitted. It is therefore not a replacement for Apple App Attest, Android Play Integrity, or a per-device public-key registry; those providers still require their own certified verification paths.
 
@@ -53,7 +58,7 @@ The mobile app must never receive manufacturer master keys, HSM credentials, raw
 
 1. OAuth/OIDC authentication and app/device identity integration
 2. Apple App Attest verifier with production certificate fixtures
-3. Android Play Integrity verifier with Google Cloud configuration
+3. Google Play Integrity production configuration and real-device fixture validation
 4. Real device registry and lifecycle controls
 5. HSM-backed Crypto Service over mTLS
 6. Interswitch sandbox adapter with signed webhooks

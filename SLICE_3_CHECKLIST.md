@@ -24,6 +24,7 @@
 | AWS KMS-backed production verification | Complete at adapter boundary | Asymmetric `SIGN_VERIFY` KMS adapter, exact key binding, allowlisted algorithm, signed counter envelope, AWS SDK credential chain, and fail-closed configuration |
 | AWS KMS production activation | Blocked by external prerequisite | Staging key and live cryptographic path are available; production still requires approved key policy, IAM `kms:Verify` scope, deployment credentials, and an approved assertion fixture |
 | CloudHSM-backed production verification | Blocked by external prerequisite | Requires approved PKCS#11 client adapter, cluster networking, crypto-user secret handling, key registry, and HSM operational controls |
+| Google Play Integrity verifier adapter | Complete at adapter boundary | OAuth service-account token source, Google decode endpoint, package/request-hash binding, app recognition, licensing, certificate digest, device-integrity policy, and stable failure codes; local HTTP fixtures pass |
 | Development test provider | Complete | Explicit Ed25519-only verifier, not a platform trust substitute |
 | Genuine Apple/Android devices pass | Blocked by external prerequisite | Requires real provider verifiers, app identities, vendor credentials, and device fixtures |
 | Apple App Attest validation | Blocked by external prerequisite | Requires Apple App ID, root/certificate validation fixtures, and iOS test app |

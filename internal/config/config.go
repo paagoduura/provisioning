@@ -8,16 +8,20 @@ import (
 )
 
 type Config struct {
-	HTTPAddr               string
-	Environment            string
-	LogLevel               string
-	DatabaseURL            string
-	AttestationProvider    string
-	AWSRegion              string
-	AWSKMSKeyID            string
-	AWSKMSSigningAlgorithm string
-	MaxRequestBodyBytes    int64
-	ShutdownTimeout        time.Duration
+	HTTPAddr                  string
+	Environment               string
+	LogLevel                  string
+	DatabaseURL               string
+	AttestationProvider       string
+	GooglePlayPackageName     string
+	GooglePlayCredentials     string
+	GooglePlayCredentialsFile string
+	GooglePlayRequireLicensed bool
+	AWSRegion                 string
+	AWSKMSKeyID               string
+	AWSKMSSigningAlgorithm    string
+	MaxRequestBodyBytes       int64
+	ShutdownTimeout           time.Duration
 }
 
 func Load() (Config, error) {
@@ -33,7 +37,7 @@ func Load() (Config, error) {
 	if provider == "" && os.Getenv("AWS_KMS_KEY_ID") != "" {
 		provider = "aws-kms"
 	}
-	cfg := Config{HTTPAddr: getenv("HTTP_ADDR", ":8080"), Environment: getenv("ENVIRONMENT", "development"), LogLevel: getenv("LOG_LEVEL", "info"), DatabaseURL: os.Getenv("DATABASE_URL"), AttestationProvider: provider, AWSRegion: getenv("AWS_REGION", "eu-north-1"), AWSKMSKeyID: os.Getenv("AWS_KMS_KEY_ID"), AWSKMSSigningAlgorithm: getenv("AWS_KMS_SIGNING_ALGORITHM", "RSASSA_PKCS1_V1_5_SHA_256"), MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second}
+	cfg := Config{HTTPAddr: getenv("HTTP_ADDR", ":8080"), Environment: getenv("ENVIRONMENT", "development"), LogLevel: getenv("LOG_LEVEL", "info"), DatabaseURL: os.Getenv("DATABASE_URL"), AttestationProvider: provider, GooglePlayPackageName: os.Getenv("GOOGLE_PLAY_INTEGRITY_PACKAGE_NAME"), GooglePlayCredentials: os.Getenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_JSON"), GooglePlayCredentialsFile: os.Getenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_FILE"), GooglePlayRequireLicensed: getenv("GOOGLE_PLAY_INTEGRITY_REQUIRE_LICENSED", "true") == "true", AWSRegion: getenv("AWS_REGION", "eu-north-1"), AWSKMSKeyID: os.Getenv("AWS_KMS_KEY_ID"), AWSKMSSigningAlgorithm: getenv("AWS_KMS_SIGNING_ALGORITHM", "RSASSA_PKCS1_V1_5_SHA_256"), MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second}
 	if cfg.HTTPAddr == "" {
 		return Config{}, errors.New("HTTP_ADDR must not be empty")
 	}
@@ -56,6 +60,9 @@ func Load() (Config, error) {
 	}
 	if cfg.AttestationProvider == "aws-kms" && cfg.AWSKMSKeyID == "" {
 		return Config{}, errors.New("AWS_KMS_KEY_ID is required when ATTESTATION_PROVIDER=aws-kms")
+	}
+	if cfg.AttestationProvider == "google-play-integrity" && (cfg.GooglePlayPackageName == "" || (cfg.GooglePlayCredentials == "" && cfg.GooglePlayCredentialsFile == "")) {
+		return Config{}, errors.New("GOOGLE_PLAY_INTEGRITY_PACKAGE_NAME and either GOOGLE_PLAY_INTEGRITY_CREDENTIALS_FILE or GOOGLE_PLAY_INTEGRITY_CREDENTIALS_JSON are required when ATTESTATION_PROVIDER=google-play-integrity")
 	}
 	return cfg, nil
 }

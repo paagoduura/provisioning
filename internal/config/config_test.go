@@ -66,3 +66,13 @@ func TestLoadRequiresKMSKeyForKMSProvider(t *testing.T) {
 		t.Fatal("expected KMS key validation error")
 	}
 }
+
+func TestLoadAcceptsGooglePlayCredentialsFile(t *testing.T) {
+	t.Setenv("ATTESTATION_PROVIDER", "google-play-integrity")
+	t.Setenv("GOOGLE_PLAY_INTEGRITY_PACKAGE_NAME", "com.duuratech.pay")
+	t.Setenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_JSON", "")
+	t.Setenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_FILE", "C:\\secrets\\play-integrity.json")
+	if _, err := Load(); err != nil {
+		t.Fatal(err)
+	}
+}

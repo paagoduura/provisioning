@@ -91,7 +91,18 @@ func main() {
 		}
 		verifier = attestation.KMSVerifier{Client: kms.NewFromConfig(awsConfig), KeyID: cfg.AWSKMSKeyID, Algorithm: algorithm}
 		log.Info("attestation_verifier_selected", "provider", attestation.KMSProvider, "region", cfg.AWSRegion, "algorithm", cfg.AWSKMSSigningAlgorithm)
-	case "apple-app-attest", "google-play-integrity", "cloudhsm-pkcs11":
+	case "google-play-integrity":
+		credentials := []byte(cfg.GooglePlayCredentials)
+		if cfg.GooglePlayCredentialsFile != "" {
+			credentials, err = os.ReadFile(cfg.GooglePlayCredentialsFile)
+			if err != nil {
+				log.Error("google_play_credentials_failed", "error", err)
+				os.Exit(1)
+			}
+		}
+		verifier = attestation.GooglePlayIntegrityVerifier{Client: http.DefaultClient, CredentialsJSON: credentials, PackageName: cfg.GooglePlayPackageName, RequireLicensed: cfg.GooglePlayRequireLicensed}
+		log.Info("attestation_verifier_selected", "provider", attestation.GooglePlayIntegrityProvider, "package_name", cfg.GooglePlayPackageName)
+	case "apple-app-attest", "cloudhsm-pkcs11":
 		log.Error("attestation_verifier_unavailable", "provider", cfg.AttestationProvider, "error", "provider adapter and external trust configuration are not installed")
 	default:
 		log.Warn("attestation_verifier_selected", "provider", "unavailable", "warning", "set ATTESTATION_PROVIDER and configure its approved verifier before production use")

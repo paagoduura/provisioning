@@ -165,6 +165,8 @@ func writeAttestationError(w http.ResponseWriter, err error) {
 		status = http.StatusNotImplemented
 	case attestation.FailureHSMUnavailable:
 		status = http.StatusServiceUnavailable
+	case attestation.FailureGoogleUnavailable:
+		status = http.StatusServiceUnavailable
 	case attestation.FailureRequestBinding:
 		status = http.StatusBadRequest
 	}
