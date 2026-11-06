@@ -156,7 +156,7 @@ try {
     }
     Write-Host 'PASS fresh API health and readiness'
 
-    $e2eArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $repoRoot 'scripts\staging-kms-e2e.ps1'), '-BaseUrl', $apiUrl)
+	$e2eArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $repoRoot 'scripts\staging-kms-e2e.ps1'), '-ApiBaseUrl', $apiUrl)
     if ($SkipDatabaseCheck) {
         $e2eArgs += '-SkipDatabaseCheck'
     }
