@@ -45,12 +45,15 @@ function Invoke-ExpectedReplay([string]$Uri, [object]$Body) {
     catch {
         $response = $_.Exception.Response
         if ($null -eq $response) { throw }
-        $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
-        $errorBody = $reader.ReadToEnd()
-        $reader.Dispose()
-        if ([int]$response.StatusCode -ne 409) {
-            throw "Replay request returned HTTP $([int]$response.StatusCode), expected 409: $errorBody"
-        }
+		$reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+		$errorBody = $reader.ReadToEnd()
+		$reader.Dispose()
+		if ([string]::IsNullOrWhiteSpace($errorBody) -and $_.ErrorDetails.Message) {
+			$errorBody = $_.ErrorDetails.Message
+		}
+		if ([int]$response.StatusCode -ne 409) {
+			throw "Replay request returned HTTP $([int]$response.StatusCode), expected 409: $errorBody"
+		}
 		$errorResult = $errorBody | ConvertFrom-Json
 		$failureCode = [string]$errorResult.failure_code
 		if ([string]::IsNullOrWhiteSpace($failureCode)) {
@@ -75,6 +78,9 @@ function Invoke-ExpectedFailure([string]$Uri, [object]$Body, [int]$ExpectedStatu
 		$reader = New-Object System.IO.StreamReader($response.GetResponseStream())
 		$errorBody = $reader.ReadToEnd()
 		$reader.Dispose()
+		if ([string]::IsNullOrWhiteSpace($errorBody) -and $_.ErrorDetails.Message) {
+			$errorBody = $_.ErrorDetails.Message
+		}
 		if ([int]$response.StatusCode -ne $ExpectedStatus) {
 			throw "Negative request returned HTTP $([int]$response.StatusCode), expected ${ExpectedStatus}: $errorBody"
 		}
