@@ -161,11 +161,16 @@ try {
         $e2eArgs += '-SkipDatabaseCheck'
     }
     & powershell @e2eArgs
-    if ($LASTEXITCODE -ne 0) {
-        Fail "staging-kms-e2e.ps1 failed. API logs: $stdoutPath and $stderrPath"
-    }
-    $stdoutTask.Result | Set-Content -Path $stdoutPath
-    $stderrTask.Result | Set-Content -Path $stderrPath
+	if ($LASTEXITCODE -ne 0) {
+		Fail "staging-kms-e2e.ps1 failed. API logs: $stdoutPath and $stderrPath"
+	}
+	if (-not $KeepApiRunning -and $apiProcessStarted -and -not $apiProcess.HasExited) {
+		Stop-Process -Id $apiProcess.Id -Force -ErrorAction SilentlyContinue
+		$apiProcess.WaitForExit()
+		Write-Host "Stopped fresh API process: $($apiProcess.Id)"
+	}
+	$stdoutTask.Result | Set-Content -Path $stdoutPath
+	$stderrTask.Result | Set-Content -Path $stderrPath
     Write-Host 'PASS: Slice 3 staging acceptance gate completed successfully.'
 }
 catch {
