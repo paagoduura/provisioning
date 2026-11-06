@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ApiBaseUrl = $(if ($env:OTA_API_BASE_URL) { $env:OTA_API_BASE_URL } else { 'http://127.0.0.1:8080' }),
-    [string]$ApiExe = '.\provisioning-api.exe',
+	[string]$ApiExe = '.\bin\ota-api.exe',
     [int]$StartupTimeoutSeconds = 30,
     [switch]$SkipDatabaseCheck,
     [switch]$KeepApiRunning
