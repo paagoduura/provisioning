@@ -2,9 +2,12 @@
 param(
     [string]$ApiBaseUrl = $(if ($env:OTA_API_BASE_URL) { $env:OTA_API_BASE_URL } else { 'http://127.0.0.1:8080' }),
     [string]$AwsProfile = $(if ($env:AWS_PROFILE) { $env:AWS_PROFILE } else { 'chris-stev' }),
-    [string]$AwsRegion = $(if ($env:AWS_REGION) { $env:AWS_REGION } else { 'eu-north-1' }),
-    [string]$KmsKeyId = $env:AWS_KMS_KEY_ID,
-    [string]$SigningAlgorithm = $(if ($env:AWS_KMS_SIGNING_ALGORITHM) { $env:AWS_KMS_SIGNING_ALGORITHM } else { 'RSASSA_PKCS1_V1_5_SHA_256' })
+	[string]$AwsRegion = $(if ($env:AWS_REGION) { $env:AWS_REGION } else { 'eu-north-1' }),
+	[string]$KmsKeyId = $env:AWS_KMS_KEY_ID,
+	[string]$SigningAlgorithm = $(if ($env:AWS_KMS_SIGNING_ALGORITHM) { $env:AWS_KMS_SIGNING_ALGORITHM } else { 'RSASSA_PKCS1_V1_5_SHA_256' }),
+	[string]$DatabaseUrl = $env:DATABASE_URL,
+	[switch]$RequireAppleSchema,
+	[switch]$SkipDatabaseCheck
 )
 
 $ErrorActionPreference = 'Stop'
@@ -87,8 +90,43 @@ function Invoke-ExpectedFailure([string]$Uri, [object]$Body, [int]$ExpectedStatu
 	}
 }
 
+function Assert-RequiredTables([string]$ConnectionString) {
+	if (-not (Get-Command psql -ErrorAction SilentlyContinue)) {
+		throw 'psql is required for migration inspection, or rerun with -SkipDatabaseCheck.'
+	}
+	$requiredTables = @('provisioning_sessions', 'audit_events', 'attestation_challenges', 'device_attestations', 'device_key_revocations')
+	if ($RequireAppleSchema -or -not [string]::IsNullOrWhiteSpace($env:APPLE_APP_ID)) {
+		$requiredTables += 'apple_app_attest_keys'
+	}
+	$tableArray = ($requiredTables | ForEach-Object { "'$_'" }) -join ','
+	$query = @"
+SELECT required_table
+FROM unnest(ARRAY[$tableArray]::text[]) AS required(required_table)
+WHERE to_regclass(format('public.%s', required_table)) IS NOT NULL
+ORDER BY required_table;
+"@
+	$result = & psql $ConnectionString --no-psqlrc --tuples-only --no-align --command $query 2>&1
+	if ($LASTEXITCODE -ne 0) {
+		throw "read-only migration inspection could not connect: $result"
+	}
+	$resultText = $result -join "`n"
+	foreach ($table in $requiredTables) {
+		$pattern = '(?m)^\s*' + [regex]::Escape($table) + '\s*$'
+		if ($resultText -notmatch $pattern) {
+			throw "required migration table is missing: $table"
+		}
+	}
+	Write-Output 'PASS migration inspection: all required tables exist'
+}
+
 if ([string]::IsNullOrWhiteSpace($KmsKeyId)) {
-    throw 'AWS_KMS_KEY_ID must be set to the staging asymmetric KMS key ARN or ID.'
+	throw 'AWS_KMS_KEY_ID must be set to the staging asymmetric KMS key ARN or ID.'
+}
+if (-not $SkipDatabaseCheck -and [string]::IsNullOrWhiteSpace($DatabaseUrl)) {
+	throw 'DATABASE_URL must be set unless -SkipDatabaseCheck is explicitly supplied.'
+}
+if (-not $SkipDatabaseCheck) {
+	Assert-RequiredTables $DatabaseUrl
 }
 
 $temporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('ota-kms-e2e-' + [guid]::NewGuid().ToString('N'))
@@ -178,8 +216,8 @@ try {
     }
 
     $finalSession = Invoke-RestMethod -Method Get -Uri "$ApiBaseUrl/v1/provisioning-sessions/$sessionId"
-	if ($finalSession.state -ne 'device_attested') {
-		throw "Session did not transition to device_attested: $($finalSession.state)"
+	if ($finalSession.state -ne 'DEVICE_ATTESTED') {
+		throw "Session did not transition to DEVICE_ATTESTED: $($finalSession.state)"
 	}
 
 	# Use a fresh session/challenge for negative cryptographic and binding tests.

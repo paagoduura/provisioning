@@ -5,7 +5,9 @@ go 1.22
 require (
 	github.com/aws/aws-sdk-go-v2/config v1.31.12
 	github.com/aws/aws-sdk-go-v2/service/kms v1.45.6
+	github.com/fxamacker/cbor/v2 v2.7.0
 	github.com/jackc/pgx/v5 v5.7.2
+	golang.org/x/oauth2 v0.24.0
 )
 
 require (
@@ -25,6 +27,7 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/crypto v0.31.0 // indirect
 	golang.org/x/oauth2 v0.24.0 // indirect
 	golang.org/x/sync v0.10.0 // indirect

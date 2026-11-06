@@ -117,6 +117,28 @@ func TestChallengeIsBoundAndSingleUse(t *testing.T) {
 	}
 }
 
+func TestChallengeBindingAcceptsPersistedRequestHashDigest(t *testing.T) {
+	_, private, _ := ed25519.GenerateKey(rand.Reader)
+	public := private.Public().(ed25519.PublicKey)
+	repo := &testRepo{}
+	tr := &transitioner{sessions: map[string]domain.ProvisioningSession{"s1": {ID: "s1", State: domain.StateDeviceDiscovered, ExpiresAt: now().Add(10 * time.Minute)}}}
+	svc := New(repo, repo, DevEd25519Verifier{Keys: map[string]ed25519.PublicKey{"k1": public}}, tr, nil)
+	challenge, err := svc.IssueChallenge(context.Background(), "s1", "request-digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// PostgreSQL returns the stored digest rather than the original request hash.
+	persisted := repo.challenges[challenge.ID]
+	persisted.RequestHash = ""
+	persisted.RequestHashDigest = hashRequest("request-digest")
+	repo.challenges[challenge.ID] = persisted
+	message := []byte(challenge.Value + "\nrequest-digest\ns1")
+	assertion := base64.RawURLEncoding.EncodeToString(ed25519.Sign(private, message))
+	if _, err := svc.Verify(context.Background(), "s1", Submission{ChallengeID: challenge.ID, Provider: "dev-ed25519", KeyID: "k1", Assertion: assertion, RequestHash: "request-digest"}); err != nil {
+		t.Fatalf("persisted request-hash digest should verify: %v", err)
+	}
+}
+
 func TestAlteredClonedAndRevokedDevicesFail(t *testing.T) {
 	_, private, _ := ed25519.GenerateKey(rand.Reader)
 	public := private.Public().(ed25519.PublicKey)

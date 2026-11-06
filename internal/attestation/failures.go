@@ -19,6 +19,11 @@ const (
 	FailureGoogleUnavailable    = "ATTESTATION_GOOGLE_PLAY_UNAVAILABLE"
 	FailureGoogleInvalidToken   = "ATTESTATION_GOOGLE_PLAY_INVALID_TOKEN"
 	FailureGoogleInvalidVerdict = "ATTESTATION_GOOGLE_PLAY_VERDICT_INVALID"
+	FailureAndroidToken         = "ATTESTATION_ANDROID_TOKEN_INVALID"
+	FailureAndroidRequest       = "ATTESTATION_ANDROID_REQUEST_MISMATCH"
+	FailureAndroidPackage       = "ATTESTATION_ANDROID_PACKAGE_MISMATCH"
+	FailureAndroidFreshness     = "ATTESTATION_ANDROID_TOKEN_NOT_FRESH"
+	FailureAndroidVerdict       = "ATTESTATION_ANDROID_VERDICT_REJECTED"
 	FailurePersistence          = "ATTESTATION_PERSISTENCE_FAILED"
 )
 
@@ -36,11 +41,11 @@ func FailureCode(err error) string {
 		return FailureCounterRollback
 	case errors.Is(err, ErrDeviceRevoked):
 		return FailureDeviceRevoked
+	case errors.Is(err, ErrInvalidAttestationRegistration):
+		return FailureInvalidRequest
 	case errors.Is(err, ErrUnsupportedProvider):
 		return FailureProviderUnavailable
-	case errors.Is(err, ErrHSMUnavailable):
-		return FailureHSMUnavailable
-	case errors.Is(err, ErrKMSUnavailable):
+	case errors.Is(err, ErrHSMUnavailable), errors.Is(err, ErrKMSUnavailable):
 		return FailureHSMUnavailable
 	case errors.Is(err, ErrKMSKeyMismatch):
 		return FailureKMSKeyMismatch
@@ -54,6 +59,16 @@ func FailureCode(err error) string {
 		return FailureGoogleInvalidToken
 	case errors.Is(err, ErrGooglePlayInvalidVerdict):
 		return FailureGoogleInvalidVerdict
+	case errors.Is(err, ErrAndroidInvalidToken), errors.Is(err, ErrAndroidDecodeFailed):
+		return FailureAndroidToken
+	case errors.Is(err, ErrAndroidRequestMismatch):
+		return FailureAndroidRequest
+	case errors.Is(err, ErrAndroidPackageMismatch):
+		return FailureAndroidPackage
+	case errors.Is(err, ErrAndroidTokenExpired):
+		return FailureAndroidFreshness
+	case errors.Is(err, ErrAndroidAppUnrecognized), errors.Is(err, ErrAndroidAccountUnlicensed), errors.Is(err, ErrAndroidDeviceIntegrity):
+		return FailureAndroidVerdict
 	default:
 		return FailureVerification
 	}

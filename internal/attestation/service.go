@@ -1,6 +1,7 @@
 package attestation
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -14,13 +15,14 @@ import (
 )
 
 var (
-	ErrChallengeNotFound   = errors.New("attestation challenge not found")
-	ErrChallengeExpired    = errors.New("attestation challenge expired")
-	ErrChallengeUsed       = errors.New("attestation challenge already used")
-	ErrRequestBinding      = errors.New("attestation request binding mismatch")
-	ErrUnsupportedProvider = errors.New("attestation provider is not configured")
-	ErrCounterRollback     = errors.New("attestation counter did not increase")
-	ErrDeviceRevoked       = errors.New("attestation device key is revoked")
+	ErrChallengeNotFound              = errors.New("attestation challenge not found")
+	ErrChallengeExpired               = errors.New("attestation challenge expired")
+	ErrChallengeUsed                  = errors.New("attestation challenge already used")
+	ErrRequestBinding                 = errors.New("attestation request binding mismatch")
+	ErrUnsupportedProvider            = errors.New("attestation provider is not configured")
+	ErrCounterRollback                = errors.New("attestation counter did not increase")
+	ErrDeviceRevoked                  = errors.New("attestation device key is revoked")
+	ErrInvalidAttestationRegistration = errors.New("invalid attestation registration")
 )
 
 type ChallengeRepository interface {
@@ -36,6 +38,10 @@ type AttestationRecordRepository interface {
 
 type RevocationChecker interface {
 	IsRevoked(context.Context, string, string) (bool, error)
+}
+
+type AttestationRegistrar interface {
+	RegisterAttestation(context.Context, Challenge, string, string) error
 }
 
 type Service struct {
@@ -59,6 +65,41 @@ func New(challenges ChallengeRepository, records AttestationRecordRepository, ve
 }
 
 func (s *Service) SetRevocationChecker(checker RevocationChecker) { s.revocations = checker }
+
+func (s *Service) Register(ctx context.Context, sessionID string, input Submission) error {
+	if input.Provider != AppleAppAttestProvider || input.KeyID == "" || input.AttestationObject == "" || input.RequestHash == "" || input.ChallengeID == "" {
+		return ErrInvalidAttestationRegistration
+	}
+	challenge, err := s.challenges.Get(ctx, input.ChallengeID)
+	if err != nil {
+		return err
+	}
+	if challenge.SessionID != sessionID {
+		return ErrRequestBinding
+	}
+	if challenge.UsedAt != nil {
+		return ErrChallengeUsed
+	}
+	if !s.now().Before(challenge.ExpiresAt) {
+		return ErrChallengeExpired
+	}
+	if len(challenge.RequestHashDigest) > 0 {
+		if !bytes.Equal(challenge.RequestHashDigest, hashRequest(input.RequestHash)) {
+			return ErrRequestBinding
+		}
+	} else if challenge.RequestHash != input.RequestHash {
+		return ErrRequestBinding
+	}
+	registrar, ok := s.verifier.(AttestationRegistrar)
+	if !ok {
+		return ErrUnsupportedProvider
+	}
+	if err := registrar.RegisterAttestation(ctx, challenge, input.KeyID, input.AttestationObject); err != nil {
+		return err
+	}
+	_, err = s.challenges.Consume(ctx, input.ChallengeID, s.now())
+	return err
+}
 
 func (s *Service) IssueChallenge(ctx context.Context, sessionID, requestHash string) (challenge Challenge, err error) {
 	defer func() {
@@ -123,7 +164,11 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 	if challenge.SessionID != sessionID {
 		return VerifiedResult{}, ErrRequestBinding
 	}
-	if challenge.RequestHash != input.RequestHash {
+	if len(challenge.RequestHashDigest) > 0 {
+		if !bytes.Equal(challenge.RequestHashDigest, hashRequest(input.RequestHash)) {
+			return VerifiedResult{}, ErrRequestBinding
+		}
+	} else if challenge.RequestHash != input.RequestHash {
 		return VerifiedResult{}, ErrRequestBinding
 	}
 	if s.revocations != nil {

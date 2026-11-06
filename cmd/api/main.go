@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/paagoduura/provisioning/internal/config"
 	httpapi "github.com/paagoduura/provisioning/internal/httpapi"
 	"github.com/paagoduura/provisioning/internal/service"
+	"golang.org/x/oauth2/google"
 )
 
 func main() {
@@ -42,9 +44,9 @@ func main() {
 			log.Error("database_config_failed", "error", parseErr)
 			os.Exit(1)
 		}
-		// Supabase transaction poolers do not guarantee that a connection
-		// returns to the same backend. Disable pgx prepared statements so
-		// statement names cannot collide across pooled backend connections.
+		// Supabase transaction pooling (port 6543) does not preserve named
+		// prepared statements across connections. Simple protocol works for
+		// both pooled and direct PostgreSQL connections.
 		poolConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 		pool, err = pgxpool.NewWithConfig(context.Background(), poolConfig)
 		if err != nil {
@@ -76,38 +78,99 @@ func main() {
 		log.Warn("persistence_selected", "provider", "memory", "warning", "development_only")
 	}
 	provisioning := service.New(repo, mock.CryptoService{}, mock.InterswitchAdapter{}, auditSink)
-	var verifier attestation.Verifier = attestation.UnavailableVerifier{}
-	switch cfg.AttestationProvider {
-	case "aws-kms":
+	verifiers := attestation.ProviderRouter{}
+	providerEnabled := func(provider string) bool {
+		return cfg.AttestationProvider == "" || cfg.AttestationProvider == provider
+	}
+	if cfg.AWSKMSKeyID != "" && providerEnabled(attestation.KMSProvider) {
 		algorithm, algorithmErr := attestation.ParseKMSAlgorithm(cfg.AWSKMSSigningAlgorithm)
 		if algorithmErr != nil {
 			log.Error("kms_config_failed", "error", algorithmErr)
 			os.Exit(1)
 		}
-		awsConfig, awsErr := awscfg.LoadDefaultConfig(context.Background(), awscfg.WithRegion(cfg.AWSRegion))
+		awsOptions := []func(*awscfg.LoadOptions) error{awscfg.WithRegion(cfg.AWSRegion)}
+		if awsProfile := os.Getenv("AWS_PROFILE"); awsProfile != "" {
+			awsOptions = append(awsOptions, awscfg.WithSharedConfigProfile(awsProfile))
+		}
+		awsConfig, awsErr := awscfg.LoadDefaultConfig(context.Background(), awsOptions...)
 		if awsErr != nil {
 			log.Error("aws_config_failed", "error", awsErr)
 			os.Exit(1)
 		}
-		verifier = attestation.KMSVerifier{Client: kms.NewFromConfig(awsConfig), KeyID: cfg.AWSKMSKeyID, Algorithm: algorithm}
-		log.Info("attestation_verifier_selected", "provider", attestation.KMSProvider, "region", cfg.AWSRegion, "algorithm", cfg.AWSKMSSigningAlgorithm)
-	case "google-play-integrity":
+		verifiers[attestation.KMSProvider] = attestation.KMSVerifier{Client: kms.NewFromConfig(awsConfig), KeyID: cfg.AWSKMSKeyID, Algorithm: algorithm}
+		log.Info("attestation_verifier_selected", "provider", attestation.KMSProvider, "region", cfg.AWSRegion)
+	}
+	if cfg.GooglePlayPackageName != "" && providerEnabled(attestation.GooglePlayIntegrityProvider) {
 		credentials := []byte(cfg.GooglePlayCredentials)
 		if cfg.GooglePlayCredentialsFile != "" {
-			credentials, err = os.ReadFile(cfg.GooglePlayCredentialsFile)
-			if err != nil {
-				log.Error("google_play_credentials_failed", "error", err)
+			var readErr error
+			credentials, readErr = os.ReadFile(cfg.GooglePlayCredentialsFile)
+			if readErr != nil {
+				log.Error("google_play_credentials_failed", "error", readErr)
 				os.Exit(1)
 			}
 		}
-		verifier = attestation.GooglePlayIntegrityVerifier{Client: http.DefaultClient, CredentialsJSON: credentials, PackageName: cfg.GooglePlayPackageName, RequireLicensed: cfg.GooglePlayRequireLicensed, MaxTokenAge: 5 * time.Minute, MaxClockSkew: 30 * time.Second}
+		verifiers[attestation.GooglePlayIntegrityProvider] = attestation.GooglePlayIntegrityVerifier{
+			Client: http.DefaultClient, CredentialsJSON: credentials, PackageName: cfg.GooglePlayPackageName,
+			RequireLicensed: cfg.GooglePlayRequireLicensed, MaxTokenAge: 5 * time.Minute, MaxClockSkew: 30 * time.Second,
+		}
 		log.Info("attestation_verifier_selected", "provider", attestation.GooglePlayIntegrityProvider, "package_name", cfg.GooglePlayPackageName)
-	case "apple-app-attest", "cloudhsm-pkcs11":
-		log.Error("attestation_verifier_unavailable", "provider", cfg.AttestationProvider, "error", "provider adapter and external trust configuration are not installed")
-	default:
-		log.Warn("attestation_verifier_selected", "provider", "unavailable", "warning", "set ATTESTATION_PROVIDER and configure its approved verifier before production use")
 	}
-	attestationService := attestation.New(attestationRepo, attestationRecords, verifier, provisioning, auditSink)
+	if (cfg.AppleAppID != "" || cfg.AppleRootCertificate != "" || cfg.AppleRootCertificatePEM != "") && providerEnabled(attestation.AppleAppAttestProvider) {
+		if cfg.AppleAppID == "" || (cfg.AppleRootCertificate == "" && cfg.AppleRootCertificatePEM == "") || (cfg.AppleRootCertificate != "" && cfg.AppleRootCertificatePEM != "") {
+			log.Error("apple_app_attest_config_failed", "error", "APPLE_APP_ID and exactly one of APPLE_APP_ATTEST_ROOT_CERT_FILE or APPLE_APP_ATTEST_ROOT_CERT_PEM must be configured")
+			os.Exit(1)
+		}
+		rootPEM := []byte(cfg.AppleRootCertificatePEM)
+		if cfg.AppleRootCertificate != "" {
+			var readErr error
+			rootPEM, readErr = os.ReadFile(cfg.AppleRootCertificate)
+			if readErr != nil {
+				log.Error("apple_app_attest_config_failed", "error", readErr)
+				os.Exit(1)
+			}
+		}
+		root, rootErr := attestation.LoadAppleRootCertificatePEM(rootPEM)
+		if rootErr != nil {
+			log.Error("apple_app_attest_config_failed", "error", rootErr)
+			os.Exit(1)
+		}
+		var appleKeys attestation.AppleKeyStore
+		if pool != nil {
+			appleKeys = postgresadapter.NewAppleAppAttestKeyStore(pool)
+		} else {
+			appleKeys = attestation.NewMemoryAppleKeyStore()
+		}
+		verifiers[attestation.AppleAppAttestProvider] = attestation.AppleAppAttestVerifier{AppID: cfg.AppleAppID, Environment: cfg.AppleEnvironment, AppleRoot: root, Keys: appleKeys}
+		log.Info("attestation_verifier_selected", "provider", attestation.AppleAppAttestProvider, "environment", cfg.AppleEnvironment)
+	}
+	if (cfg.AndroidPackageName != "" || cfg.AndroidCloudProject != 0 || cfg.AndroidServiceAccount != "") && providerEnabled(attestation.AndroidPlayIntegrityProvider) {
+		oauthConfig, oauthErr := google.JWTConfigFromJSON([]byte(cfg.AndroidServiceAccount), "https://www.googleapis.com/auth/playintegrity")
+		if oauthErr != nil {
+			log.Error("android_play_integrity_config_failed", "error", oauthErr)
+			os.Exit(1)
+		}
+		allowed := make(map[string]struct{})
+		for _, verdict := range strings.Split(cfg.AndroidAllowedVerdicts, ",") {
+			if verdict = strings.TrimSpace(verdict); verdict != "" {
+				allowed[verdict] = struct{}{}
+			}
+		}
+		verifiers[attestation.AndroidPlayIntegrityProvider] = attestation.AndroidPlayIntegrityVerifier{
+			PackageName:           cfg.AndroidPackageName,
+			CloudProjectNumber:    cfg.AndroidCloudProject,
+			Mode:                  attestation.PlayIntegrityMode(cfg.AndroidMode),
+			MaxTokenAge:           cfg.AndroidMaxTokenAge,
+			RequireLicensed:       cfg.AndroidRequireLicensed,
+			AllowedDeviceVerdicts: allowed,
+			Decoder:               attestation.GooglePlayIntegrityClient{PackageName: cfg.AndroidPackageName, TokenSource: oauthConfig.TokenSource(context.Background())},
+		}
+		log.Info("attestation_verifier_selected", "provider", attestation.AndroidPlayIntegrityProvider, "package_name", cfg.AndroidPackageName, "mode", cfg.AndroidMode, "cloud_project_configured", true)
+	}
+	if len(verifiers) == 0 {
+		log.Warn("attestation_verifier_selected", "provider", "unavailable", "warning", "configure AWS KMS or Apple App Attest before production use")
+	}
+	attestationService := attestation.New(attestationRepo, attestationRecords, verifiers, provisioning, auditSink)
 	attestationService.SetRevocationChecker(revocationChecker)
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes).Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

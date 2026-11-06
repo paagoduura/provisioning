@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"sync"
 	"time"
@@ -22,6 +23,9 @@ func NewAttestationRepository() *AttestationRepository {
 func (r *AttestationRepository) Create(ctx context.Context, c attestation.Challenge) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if len(c.RequestHashDigest) == 0 {
+		c.RequestHashDigest = digest(c.RequestHash)
+	}
 	r.challenges[c.ID] = c
 	return nil
 }
@@ -82,3 +86,8 @@ func (r *AttestationRepository) IsRevoked(ctx context.Context, provider, keyID s
 }
 
 var _ = errors.New
+
+func digest(value string) []byte {
+	sum := sha256.Sum256([]byte(value))
+	return sum[:]
+}

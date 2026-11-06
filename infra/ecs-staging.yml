@@ -1,0 +1,297 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Provisioning API staging service on ECS Fargate with ALB, CloudWatch, Secrets Manager, and scoped KMS verification.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet::Id
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet::Id
+  ImageUri:
+    Type: String
+  DatabaseSecretArn:
+    Type: String
+  KmsKeyArn:
+    Type: String
+  AppleAppID:
+    Type: String
+    Default: ''
+  AppleEnvironment:
+    Type: String
+    Default: production
+    AllowedValues: [production, sandbox, development]
+  AppleRootCertificateSecretArn:
+    Type: String
+    Default: ''
+  AndroidPackageName:
+    Type: String
+    Default: ''
+  AndroidCloudProjectNumber:
+    Type: String
+    Default: ''
+  AndroidMode:
+    Type: String
+    Default: standard
+    AllowedValues: [standard, classic]
+  AndroidServiceAccountSecretArn:
+    Type: String
+    Default: ''
+  ContainerCpu:
+    Type: String
+    Default: '256'
+  ContainerMemory:
+    Type: String
+    Default: '512'
+
+Conditions:
+  HasAppleAppAttest: !And
+    - !Not [!Equals [!Ref AppleAppID, '']]
+    - !Not [!Equals [!Ref AppleRootCertificateSecretArn, '']]
+  HasAndroidPlayIntegrity: !And
+    - !Not [!Equals [!Ref AndroidPackageName, '']]
+    - !Not [!Equals [!Ref AndroidCloudProjectNumber, '']]
+    - !Not [!Equals [!Ref AndroidServiceAccountSecretArn, '']]
+
+Resources:
+  Cluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: provisioning-staging
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/provisioning-staging
+      RetentionInDays: 30
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public HTTP access to provisioning staging ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: provisioning-staging-alb
+
+  TaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Provisioning staging ECS task traffic
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: provisioning-staging-task
+
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: provisioning-staging-ecs-execution
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadDatabaseSecret
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DatabaseSecretArn
+                  - !If [HasAppleAppAttest, !Ref AppleRootCertificateSecretArn, !Ref AWS::NoValue]
+                  - !If [HasAndroidPlayIntegrity, !Ref AndroidServiceAccountSecretArn, !Ref AWS::NoValue]
+
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: provisioning-staging-ecs-task
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: VerifyConfiguredKmsKey
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: kms:Verify
+                Resource: !Ref KmsKeyArn
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: provisioning-staging
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: !Ref ContainerCpu
+      Memory: !Ref ContainerMemory
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: provisioning-api
+          Image: !Ref ImageUri
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              Protocol: tcp
+          Environment:
+            - Name: ENVIRONMENT
+              Value: staging
+            - Name: AWS_REGION
+              Value: eu-north-1
+            - Name: AWS_KMS_KEY_ID
+              Value: !Ref KmsKeyArn
+            - Name: AWS_KMS_SIGNING_ALGORITHM
+              Value: RSASSA_PKCS1_V1_5_SHA_256
+            - !If
+              - HasAppleAppAttest
+              - Name: APPLE_APP_ID
+                Value: !Ref AppleAppID
+              - !Ref AWS::NoValue
+            - !If
+              - HasAppleAppAttest
+              - Name: APPLE_APP_ATTEST_ENVIRONMENT
+                Value: !Ref AppleEnvironment
+              - !Ref AWS::NoValue
+            - !If
+              - HasAndroidPlayIntegrity
+              - Name: ANDROID_PACKAGE_NAME
+                Value: !Ref AndroidPackageName
+              - !Ref AWS::NoValue
+            - !If
+              - HasAndroidPlayIntegrity
+              - Name: ANDROID_PLAY_INTEGRITY_CLOUD_PROJECT_NUMBER
+                Value: !Ref AndroidCloudProjectNumber
+              - !Ref AWS::NoValue
+            - !If
+              - HasAndroidPlayIntegrity
+              - Name: ANDROID_PLAY_INTEGRITY_MODE
+                Value: !Ref AndroidMode
+              - !Ref AWS::NoValue
+          Secrets:
+            - Name: DATABASE_URL
+              ValueFrom: !Ref DatabaseSecretArn
+            - !If
+              - HasAppleAppAttest
+              - Name: APPLE_APP_ATTEST_ROOT_CERT_PEM
+                ValueFrom: !Ref AppleRootCertificateSecretArn
+              - !Ref AWS::NoValue
+            - !If
+              - HasAndroidPlayIntegrity
+              - Name: ANDROID_PLAY_INTEGRITY_SERVICE_ACCOUNT_JSON
+                ValueFrom: !Ref AndroidServiceAccountSecretArn
+              - !Ref AWS::NoValue
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: eu-north-1
+              awslogs-stream-prefix: ecs
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: provisioning-staging-alb
+      Scheme: internet-facing
+      Type: application
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetB
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: provisioning-staging
+      VpcId: !Ref VpcId
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      HealthCheckPath: /healthz
+      HealthCheckProtocol: HTTP
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: HttpListener
+    Properties:
+      ServiceName: provisioning-staging
+      Cluster: !Ref Cluster
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 1
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnetA
+            - !Ref PublicSubnetB
+          SecurityGroups:
+            - !Ref TaskSecurityGroup
+      LoadBalancers:
+        - ContainerName: provisioning-api
+          ContainerPort: 8080
+          TargetGroupArn: !Ref TargetGroup
+
+Outputs:
+  ServiceUrl:
+    Description: Public HTTP URL for the provisioning staging API
+    Value: !Sub http://${LoadBalancer.DNSName}
+  ClusterName:
+    Value: !Ref Cluster
+  ServiceName:
+    Value: !Ref Service
+  LogGroupName:
+    Value: !Ref LogGroup

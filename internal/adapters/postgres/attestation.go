@@ -35,6 +35,7 @@ func (r *AttestationRepository) Get(ctx context.Context, id string) (attestation
 	if err != nil {
 		return attestation.Challenge{}, fmt.Errorf("get attestation challenge: %w", err)
 	}
+	c.RequestHashDigest = requestHash
 	c.UsedAt = usedAt
 	return c, nil
 }
@@ -56,6 +57,7 @@ func (r *AttestationRepository) Consume(ctx context.Context, id string, now time
 	if err != nil {
 		return attestation.Challenge{}, fmt.Errorf("consume attestation challenge: %w", err)
 	}
+	c.RequestHashDigest = requestHash
 	return c, nil
 }
 func (r *AttestationRepository) SaveAttestation(ctx context.Context, sessionID string, result attestation.VerifiedResult, now time.Time) error {
