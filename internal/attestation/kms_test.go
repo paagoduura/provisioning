@@ -84,6 +84,24 @@ func TestKMSVerifierClassifiesProviderErrorsAsUnavailable(t *testing.T) {
 	}
 }
 
+func TestKMSVerifierClassifiesInvalidSignatureExceptionAsInvalidSignature(t *testing.T) {
+	client := &fakeKMS{err: &types.KMSInvalidSignatureException{}}
+	verifier := KMSVerifier{Client: client, KeyID: "key-1", Algorithm: types.SigningAlgorithmSpecRsassaPkcs1V15Sha256}
+	input := Submission{Provider: KMSProvider, KeyID: verifier.KeyID, RequestHash: "request"}
+	envelope, err := json.Marshal(KMSAssertion{Signature: base64.RawURLEncoding.EncodeToString([]byte("signature")), Counter: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Assertion = base64.RawURLEncoding.EncodeToString(envelope)
+	_, verifyErr := verifier.Verify(context.Background(), Challenge{}, input)
+	if !errors.Is(verifyErr, ErrKMSInvalidSignature) {
+		t.Fatalf("expected invalid KMS signature, got %v", verifyErr)
+	}
+	if got := FailureCode(verifyErr); got != FailureKMSInvalidSignature {
+		t.Fatalf("expected invalid signature failure code, got %s", got)
+	}
+}
+
 func TestKMSFailureCodesAreStable(t *testing.T) {
 	checks := []struct {
 		err  error

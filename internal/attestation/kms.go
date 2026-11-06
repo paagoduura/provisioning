@@ -95,6 +95,10 @@ func (v KMSVerifier) Verify(ctx context.Context, challenge Challenge, input Subm
 		SigningAlgorithm: v.Algorithm,
 	})
 	if err != nil {
+		var invalidSignature *types.KMSInvalidSignatureException
+		if errors.As(err, &invalidSignature) {
+			return VerifiedResult{}, ErrKMSInvalidSignature
+		}
 		// A KMS API, credential, or network failure is not evidence that the
 		// device signature is invalid. Preserve the fail-closed provider
 		// classification so callers return a 503/HSM-unavailable result.
