@@ -16,6 +16,7 @@
 | Cloned/unknown key rejection | Complete in test verifier | Unknown key IDs fail closed |
 | Durable Supabase challenge storage | Complete | `attestation_challenges` table and indexes applied |
 | Durable attestation record storage | Complete | `device_attestations` table with uniqueness constraint |
+| Durable device registry persistence | Complete | `registered_devices` and `registered_device_attestations` migrations plus transactional PostgreSQL `DeviceRepository`; raw device identifiers remain excluded |
 | Failure reason mapping | Complete | Stable `failure_code` values and status mapping at API boundary |
 | Verification-data log redaction | Complete | Assertions/challenges are absent from HTTP logs; audit stores reason codes only |
 | Fail-closed production behavior | Complete | Unconfigured Apple/Android provider returns `501 Not Implemented` |
