@@ -100,7 +100,7 @@ function Assert-RequiredTables([string]$ConnectionString) {
 	if (-not (Get-Command psql -ErrorAction SilentlyContinue)) {
 		throw 'psql is required for migration inspection, or rerun with -SkipDatabaseCheck.'
 	}
-	$requiredTables = @('provisioning_sessions', 'audit_events', 'attestation_challenges', 'device_attestations', 'device_key_revocations')
+	$requiredTables = @('provisioning_sessions', 'audit_events', 'attestation_challenges', 'device_attestations', 'device_key_revocations', 'registered_devices', 'registered_device_attestations')
 	if ($RequireAppleSchema -or -not [string]::IsNullOrWhiteSpace($env:APPLE_APP_ID)) {
 		$requiredTables += 'apple_app_attest_keys'
 	}
