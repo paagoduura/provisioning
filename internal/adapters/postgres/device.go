@@ -122,7 +122,7 @@ func (r *DeviceRepository) Save(ctx context.Context, device domain.Device) error
 	return nil
 }
 
-var ErrDeviceNotFound = errors.New("device not found")
+var ErrDeviceNotFound = domain.ErrDeviceNotFound
 
 type queryer interface {
 	QueryRow(context.Context, string, ...any) pgx.Row

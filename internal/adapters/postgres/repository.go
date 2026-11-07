@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -45,6 +46,7 @@ func (r *SessionRepository) Get(ctx context.Context, id string) (domain.Provisio
 	if err != nil {
 		return domain.ProvisioningSession{}, fmt.Errorf("get session: %w", err)
 	}
+	s.DeviceIdentityHash = hex.EncodeToString(deviceHash)
 	return s, nil
 }
 

@@ -39,17 +39,18 @@ var transitions = map[ProvisioningState]map[ProvisioningState]bool{
 }
 
 type ProvisioningSession struct {
-	ID             string            `json:"id"`
-	IdempotencyKey string            `json:"-"`
-	UserID         string            `json:"user_id"`
-	DeviceUID      string            `json:"device_uid"`
-	DeviceModel    string            `json:"device_model"`
-	Transport      string            `json:"transport"`
-	State          ProvisioningState `json:"state"`
-	Correlation    string            `json:"correlation_id"`
-	CreatedAt      time.Time         `json:"created_at"`
-	ExpiresAt      time.Time         `json:"expires_at"`
-	FailureCode    string            `json:"failure_code,omitempty"`
+	ID                 string            `json:"id"`
+	IdempotencyKey     string            `json:"-"`
+	UserID             string            `json:"user_id"`
+	DeviceUID          string            `json:"device_uid"`
+	DeviceIdentityHash string            `json:"-"`
+	DeviceModel        string            `json:"device_model"`
+	Transport          string            `json:"transport"`
+	State              ProvisioningState `json:"state"`
+	Correlation        string            `json:"correlation_id"`
+	CreatedAt          time.Time         `json:"created_at"`
+	ExpiresAt          time.Time         `json:"expires_at"`
+	FailureCode        string            `json:"failure_code,omitempty"`
 }
 
 func (s *ProvisioningSession) Transition(next ProvisioningState) error {

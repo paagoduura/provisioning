@@ -42,6 +42,8 @@ $env:AWS_KMS_KEY_ID = "<approved asymmetric KMS key ARN>"
 
 The harness creates a session, performs device discovery, issues a challenge, signs the exact canonical message with `aws kms sign`, submits the API assertion, verifies the attested response, checks the final `DEVICE_ATTESTED` state, and inspects the required migration tables without changing the database. When `APPLE_APP_ID` is set, it also requires `apple_app_attest_keys`; use `-RequireAppleSchema` to enforce that table explicitly. Use `-SkipDatabaseCheck` only for an explicitly local API run; it does not bypass the application's staging startup guard.
 
+Successful provider verification is also bound to the durable device registry. The service derives a SHA-256 identity hash from the session device identifier, creates or updates the corresponding `registered_devices` aggregate, records the verified provider key and monotonic counter, and activates the device only after attestation succeeds. Raw device identifiers are not written to the registry. A registered device can be read with `GET /v1/devices/{device_id}`; lifecycle mutations remain behind the service boundary until authenticated operator/device identity controls are available.
+
 For the release acceptance gate, use `scripts/run-staging-kms-gate.ps1` instead of starting the API manually. The gate verifies the checked-out revision, rebuilds `provisioning-api.exe`, refuses to use an already-listening port, starts a fresh API process with the current environment, waits for `/healthz` and `/readyz`, runs the E2E harness, reports the API logs on failure, and stops the process on completion. Run it from the repository root with `DATABASE_URL`, `AWS_KMS_KEY_ID`, `AWS_REGION`, and the AWS credential chain configured:
 
 ```powershell

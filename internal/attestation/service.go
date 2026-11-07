@@ -44,6 +44,10 @@ type AttestationRegistrar interface {
 	RegisterAttestation(context.Context, Challenge, string, string) error
 }
 
+type DeviceRegistry interface {
+	RegisterVerifiedAttestation(context.Context, domain.ProvisioningSession, VerifiedResult) error
+}
+
 type Service struct {
 	challenges   ChallengeRepository
 	records      AttestationRecordRepository
@@ -55,6 +59,7 @@ type Service struct {
 	audit       audit.Sink
 	now         func() time.Time
 	revocations RevocationChecker
+	devices     DeviceRegistry
 }
 
 func New(challenges ChallengeRepository, records AttestationRecordRepository, verifier Verifier, transitioner interface {
@@ -65,6 +70,8 @@ func New(challenges ChallengeRepository, records AttestationRecordRepository, ve
 }
 
 func (s *Service) SetRevocationChecker(checker RevocationChecker) { s.revocations = checker }
+
+func (s *Service) SetDeviceRegistry(registry DeviceRegistry) { s.devices = registry }
 
 func (s *Service) Register(ctx context.Context, sessionID string, input Submission) error {
 	if input.Provider != AppleAppAttestProvider || input.KeyID == "" || input.AttestationObject == "" || input.RequestHash == "" || input.ChallengeID == "" {
@@ -171,6 +178,10 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 	} else if challenge.RequestHash != input.RequestHash {
 		return VerifiedResult{}, ErrRequestBinding
 	}
+	session, err := s.transitioner.Get(ctx, sessionID)
+	if err != nil {
+		return VerifiedResult{}, err
+	}
 	if s.revocations != nil {
 		revoked, checkErr := s.revocations.IsRevoked(ctx, input.Provider, input.KeyID)
 		if checkErr != nil {
@@ -203,6 +214,11 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 	}
 	if _, err := s.transitioner.TransitionToAttested(ctx, sessionID); err != nil {
 		return VerifiedResult{}, err
+	}
+	if s.devices != nil {
+		if err := s.devices.RegisterVerifiedAttestation(ctx, session, result); err != nil {
+			return VerifiedResult{}, err
+		}
 	}
 	if s.audit != nil {
 		_ = s.audit.Record(ctx, audit.Event{SessionID: sessionID, Type: "DEVICE_ATTESTED", Result: "SUCCESS", At: s.now()})

@@ -37,6 +37,7 @@ func main() {
 	var attestationRepo attestation.ChallengeRepository
 	var attestationRecords attestation.AttestationRecordRepository
 	var revocationChecker attestation.RevocationChecker
+	var deviceRegistry *service.DeviceService
 	var pool *pgxpool.Pool
 	if cfg.DatabaseURL != "" {
 		poolConfig, parseErr := pgxpool.ParseConfig(cfg.DatabaseURL)
@@ -67,6 +68,7 @@ func main() {
 		attestationRepo = postgresadapter.NewAttestationRepository(pool)
 		attestationRecords = postgresadapter.NewAttestationRepository(pool)
 		revocationChecker = attestationRepo.(attestation.RevocationChecker)
+		deviceRegistry = service.NewDeviceService(postgresadapter.NewDeviceRepository(pool))
 		log.Info("persistence_selected", "provider", "supabase_postgres")
 	} else {
 		repo = memory.NewSessionRepository()
@@ -172,7 +174,12 @@ func main() {
 	}
 	attestationService := attestation.New(attestationRepo, attestationRecords, verifiers, provisioning, auditSink)
 	attestationService.SetRevocationChecker(revocationChecker)
-	server := &http.Server{Addr: cfg.HTTPAddr, Handler: httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes).Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+	if deviceRegistry != nil {
+		attestationService.SetDeviceRegistry(deviceRegistry)
+	}
+	handler := httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes)
+	handler.SetDeviceRegistry(deviceRegistry)
+	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go func() {

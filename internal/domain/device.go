@@ -22,6 +22,7 @@ const (
 
 var (
 	ErrInvalidDevice              = errors.New("invalid device")
+	ErrDeviceNotFound             = errors.New("device not found")
 	ErrInvalidDeviceTransition    = errors.New("invalid device lifecycle transition")
 	ErrNoVerifiedAttestation      = errors.New("device has no verified attestation")
 	ErrAttestationKeyRevoked      = errors.New("device attestation key is revoked")

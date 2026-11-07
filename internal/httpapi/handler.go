@@ -12,6 +12,7 @@ import (
 
 	"github.com/paagoduura/provisioning/internal/adapters/memory"
 	"github.com/paagoduura/provisioning/internal/attestation"
+	"github.com/paagoduura/provisioning/internal/domain"
 	"github.com/paagoduura/provisioning/internal/service"
 )
 
@@ -19,12 +20,15 @@ type Handler struct {
 	log          *slog.Logger
 	provisioning *service.Service
 	attestation  *attestation.Service
+	devices      *service.DeviceService
 	maxBodyBytes int64
 }
 
 func New(log *slog.Logger, provisioning *service.Service, attestationService *attestation.Service, maxBodyBytes int64) *Handler {
 	return &Handler{log: log, provisioning: provisioning, attestation: attestationService, maxBodyBytes: maxBodyBytes}
 }
+
+func (h *Handler) SetDeviceRegistry(registry *service.DeviceService) { h.devices = registry }
 
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
@@ -33,6 +37,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /v1/provisioning-sessions", h.createSession)
 	mux.HandleFunc("GET /v1/provisioning-sessions/", h.getSession)
 	mux.HandleFunc("POST /v1/provisioning-sessions/", h.sessionAction)
+	mux.HandleFunc("GET /v1/devices/", h.getDevice)
 	return requestID(securityHeaders(maxBody(h.maxBodyBytes, logging(h.log, mux))))
 }
 
@@ -206,6 +211,28 @@ func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) getDevice(w http.ResponseWriter, r *http.Request) {
+	if h.devices == nil {
+		writeError(w, http.StatusServiceUnavailable, "device registry unavailable")
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/v1/devices/")
+	if id == "" || strings.Contains(id, "/") {
+		writeError(w, http.StatusBadRequest, "device id is required")
+		return
+	}
+	device, err := h.devices.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, domain.ErrDeviceNotFound) {
+			writeError(w, http.StatusNotFound, "device not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, device)
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
