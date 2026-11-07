@@ -32,6 +32,9 @@ type Config struct {
 	AndroidAllowedVerdicts    string
 	AndroidRequireLicensed    bool
 	AndroidServiceAccount     string
+	OIDCIssuerURL             string
+	OIDCAudience              string
+	OIDCRequired              bool
 	MaxRequestBodyBytes       int64
 	ShutdownTimeout           time.Duration
 }
@@ -57,6 +60,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, errors.New("ANDROID_PLAY_INTEGRITY_REQUIRE_LICENSED must be true or false")
 	}
+	oidcRequired, err := strconv.ParseBool(getenv("OIDC_REQUIRED", "false"))
+	if err != nil {
+		return Config{}, errors.New("OIDC_REQUIRED must be true or false")
+	}
 	provider := strings.TrimSpace(os.Getenv("ATTESTATION_PROVIDER"))
 	if provider == "" && os.Getenv("AWS_KMS_KEY_ID") != "" {
 		provider = "aws-kms"
@@ -67,6 +74,7 @@ func Load() (Config, error) {
 		AWSRegion: getenv("AWS_REGION", "eu-north-1"), AWSKMSKeyID: os.Getenv("AWS_KMS_KEY_ID"), AWSKMSSigningAlgorithm: getenv("AWS_KMS_SIGNING_ALGORITHM", "RSASSA_PKCS1_V1_5_SHA_256"),
 		AppleAppID: os.Getenv("APPLE_APP_ID"), AppleEnvironment: getenv("APPLE_APP_ATTEST_ENVIRONMENT", "production"), AppleRootCertificate: os.Getenv("APPLE_APP_ATTEST_ROOT_CERT_FILE"), AppleRootCertificatePEM: os.Getenv("APPLE_APP_ATTEST_ROOT_CERT_PEM"),
 		AndroidPackageName: os.Getenv("ANDROID_PACKAGE_NAME"), AndroidCloudProject: androidProject, AndroidMode: getenv("ANDROID_PLAY_INTEGRITY_MODE", "standard"), AndroidMaxTokenAge: time.Duration(androidMaxAgeSeconds) * time.Second, AndroidAllowedVerdicts: getenv("ANDROID_PLAY_INTEGRITY_ALLOWED_DEVICE_VERDICTS", "MEETS_DEVICE_INTEGRITY"), AndroidRequireLicensed: androidRequireLicensed, AndroidServiceAccount: os.Getenv("ANDROID_PLAY_INTEGRITY_SERVICE_ACCOUNT_JSON"),
+		OIDCIssuerURL: os.Getenv("OIDC_ISSUER_URL"), OIDCAudience: os.Getenv("OIDC_AUDIENCE"), OIDCRequired: oidcRequired,
 		MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second,
 	}
 	if cfg.HTTPAddr == "" {
@@ -89,6 +97,9 @@ func Load() (Config, error) {
 	if (strings.EqualFold(cfg.Environment, "staging") || strings.EqualFold(cfg.Environment, "production")) && cfg.AttestationProvider == "" {
 		return Config{}, errors.New("ATTESTATION_PROVIDER is required for staging and production")
 	}
+	if strings.EqualFold(cfg.Environment, "production") && (cfg.OIDCIssuerURL == "" || cfg.OIDCAudience == "") {
+		return Config{}, errors.New("OIDC_ISSUER_URL and OIDC_AUDIENCE are required in production")
+	}
 	if cfg.AttestationProvider == "aws-kms" && cfg.AWSKMSKeyID == "" {
 		return Config{}, errors.New("AWS_KMS_KEY_ID is required when ATTESTATION_PROVIDER=aws-kms")
 	}
@@ -107,6 +118,12 @@ func Load() (Config, error) {
 				return Config{}, errors.New("ANDROID_PLAY_INTEGRITY_MODE must be standard or classic")
 			}
 		}
+	}
+	if (cfg.OIDCIssuerURL == "") != (cfg.OIDCAudience == "") {
+		return Config{}, errors.New("OIDC_ISSUER_URL and OIDC_AUDIENCE must be configured together")
+	}
+	if cfg.OIDCRequired && (cfg.OIDCIssuerURL == "" || cfg.OIDCAudience == "") {
+		return Config{}, errors.New("OIDC_ISSUER_URL and OIDC_AUDIENCE are required when OIDC_REQUIRED=true")
 	}
 	return cfg, nil
 }

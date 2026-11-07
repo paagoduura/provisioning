@@ -116,6 +116,18 @@ func TestLoadRequiresKMSKeyForKMSProvider(t *testing.T) {
 	}
 }
 
+func TestLoadRequiresOIDCInProduction(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "production")
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("ATTESTATION_PROVIDER", "aws-kms")
+	t.Setenv("AWS_KMS_KEY_ID", "key-1")
+	t.Setenv("OIDC_ISSUER_URL", "")
+	t.Setenv("OIDC_AUDIENCE", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected production OIDC configuration error")
+	}
+}
+
 func TestLoadAcceptsGooglePlayCredentialsFile(t *testing.T) {
 	t.Setenv("ATTESTATION_PROVIDER", "google-play-integrity")
 	t.Setenv("GOOGLE_PLAY_INTEGRITY_PACKAGE_NAME", "com.example.provisioning")
@@ -123,5 +135,22 @@ func TestLoadAcceptsGooglePlayCredentialsFile(t *testing.T) {
 	t.Setenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_FILE", `C:\secrets\play-integrity.json`)
 	if _, err := Load(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestLoadRejectsPartialOIDCConfiguration(t *testing.T) {
+	t.Setenv("OIDC_ISSUER_URL", "https://issuer.example")
+	t.Setenv("OIDC_AUDIENCE", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected partial OIDC configuration error")
+	}
+}
+
+func TestLoadRequiresOIDCWhenExplicitlyEnabled(t *testing.T) {
+	t.Setenv("OIDC_ISSUER_URL", "")
+	t.Setenv("OIDC_AUDIENCE", "")
+	t.Setenv("OIDC_REQUIRED", "true")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected required OIDC configuration error")
 	}
 }

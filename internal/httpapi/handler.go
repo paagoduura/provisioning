@@ -12,6 +12,7 @@ import (
 
 	"github.com/paagoduura/provisioning/internal/adapters/memory"
 	"github.com/paagoduura/provisioning/internal/attestation"
+	"github.com/paagoduura/provisioning/internal/auth"
 	"github.com/paagoduura/provisioning/internal/domain"
 	"github.com/paagoduura/provisioning/internal/service"
 )
@@ -21,6 +22,9 @@ type Handler struct {
 	provisioning *service.Service
 	attestation  *attestation.Service
 	devices      *service.DeviceService
+	auth         interface {
+		Authenticate(http.Handler) http.Handler
+	}
 	maxBodyBytes int64
 }
 
@@ -30,6 +34,12 @@ func New(log *slog.Logger, provisioning *service.Service, attestationService *at
 
 func (h *Handler) SetDeviceRegistry(registry *service.DeviceService) { h.devices = registry }
 
+func (h *Handler) SetAuthenticator(authenticator interface {
+	Authenticate(http.Handler) http.Handler
+}) {
+	h.auth = authenticator
+}
+
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", h.health)
@@ -38,7 +48,11 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/provisioning-sessions/", h.getSession)
 	mux.HandleFunc("POST /v1/provisioning-sessions/", h.sessionAction)
 	mux.HandleFunc("GET /v1/devices/", h.getDevice)
-	return requestID(securityHeaders(maxBody(h.maxBodyBytes, logging(h.log, mux))))
+	var handler http.Handler = mux
+	if h.auth != nil {
+		handler = h.auth.Authenticate(handler)
+	}
+	return requestID(securityHeaders(maxBody(h.maxBodyBytes, logging(h.log, handler))))
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +80,13 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
+	}
+	if principal, ok := auth.PrincipalFromContext(r.Context()); ok {
+		if req.UserID != "" && req.UserID != principal.Subject {
+			writeError(w, http.StatusForbidden, "user_id does not match authenticated subject")
+			return
+		}
+		req.UserID = principal.Subject
 	}
 	result, existing, err := h.provisioning.Create(r.Context(), service.CreateInput{UserID: req.UserID, DeviceUID: req.DeviceUID, DeviceModel: req.DeviceModel, Transport: req.Transport}, r.Header.Get("Idempotency-Key"))
 	if err != nil {
@@ -96,6 +117,14 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID, action := parts[0], parts[1]
+	session, err := h.provisioning.Get(r.Context(), sessionID)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	if !h.authorizeOwner(w, r, session.UserID) {
+		return
+	}
 	switch action {
 	case "device-discovery":
 		result, err := h.provisioning.Discover(r.Context(), sessionID)
@@ -210,6 +239,9 @@ func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	if !h.authorizeOwner(w, r, result.UserID) {
+		return
+	}
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -232,7 +264,19 @@ func (h *Handler) getDevice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	if !h.authorizeOwner(w, r, device.OwnerID) {
+		return
+	}
 	writeJSON(w, http.StatusOK, device)
+}
+
+func (h *Handler) authorizeOwner(w http.ResponseWriter, r *http.Request, ownerID string) bool {
+	principal, authenticated := auth.PrincipalFromContext(r.Context())
+	if authenticated && principal.Subject != ownerID {
+		writeError(w, http.StatusForbidden, "resource belongs to a different subject")
+		return false
+	}
+	return true
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

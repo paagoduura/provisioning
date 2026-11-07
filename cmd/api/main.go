@@ -19,6 +19,7 @@ import (
 	postgresadapter "github.com/paagoduura/provisioning/internal/adapters/postgres"
 	"github.com/paagoduura/provisioning/internal/attestation"
 	"github.com/paagoduura/provisioning/internal/audit"
+	"github.com/paagoduura/provisioning/internal/auth"
 	"github.com/paagoduura/provisioning/internal/config"
 	httpapi "github.com/paagoduura/provisioning/internal/httpapi"
 	"github.com/paagoduura/provisioning/internal/service"
@@ -172,6 +173,17 @@ func main() {
 	if len(verifiers) == 0 {
 		log.Warn("attestation_verifier_selected", "provider", "unavailable", "warning", "configure AWS KMS or Apple App Attest before production use")
 	}
+	var oidcVerifier *auth.OIDCVerifier
+	if cfg.OIDCIssuerURL != "" {
+		oidcCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		oidcVerifier, err = auth.NewOIDCVerifier(oidcCtx, cfg.OIDCIssuerURL, cfg.OIDCAudience)
+		cancel()
+		if err != nil {
+			log.Error("oidc_config_failed", "error", err)
+			os.Exit(1)
+		}
+		log.Info("oidc_authentication_enabled", "issuer", cfg.OIDCIssuerURL)
+	}
 	attestationService := attestation.New(attestationRepo, attestationRecords, verifiers, provisioning, auditSink)
 	attestationService.SetRevocationChecker(revocationChecker)
 	if deviceRegistry != nil {
@@ -179,6 +191,9 @@ func main() {
 	}
 	handler := httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes)
 	handler.SetDeviceRegistry(deviceRegistry)
+	if oidcVerifier != nil {
+		handler.SetAuthenticator(oidcVerifier)
+	}
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
