@@ -22,7 +22,7 @@ func NewSessionRepository(pool *pgxpool.Pool) *SessionRepository {
 
 func (r *SessionRepository) Create(ctx context.Context, s domain.ProvisioningSession) (domain.ProvisioningSession, bool, error) {
 	var insertedID string
-	err := r.pool.QueryRow(ctx, `INSERT INTO provisioning_sessions (id, idempotency_key, user_id, device_uid_hash, device_model, transport, state, correlation_id, created_at, expires_at, failure_code) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, '')) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`, s.ID, s.IdempotencyKey, s.UserID, hashDeviceUID(s.DeviceUID), s.DeviceModel, s.Transport, s.State, s.Correlation, s.CreatedAt, s.ExpiresAt, s.FailureCode).Scan(&insertedID)
+	err := r.pool.QueryRow(ctx, `INSERT INTO provisioning_sessions (id, idempotency_key, user_id, device_uid_hash, device_model, transport, state, correlation_id, created_at, expires_at, failure_code, payment_token_ref, wrapped_payload_ref) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, '')) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`, s.ID, s.IdempotencyKey, s.UserID, hashDeviceUID(s.DeviceUID), s.DeviceModel, s.Transport, s.State, s.Correlation, s.CreatedAt, s.ExpiresAt, s.FailureCode, s.PaymentTokenRef, s.WrappedPayloadRef).Scan(&insertedID)
 	if err == nil {
 		return s, true, nil
 	}
@@ -39,7 +39,7 @@ func (r *SessionRepository) Create(ctx context.Context, s domain.ProvisioningSes
 func (r *SessionRepository) Get(ctx context.Context, id string) (domain.ProvisioningSession, error) {
 	var s domain.ProvisioningSession
 	var deviceHash []byte
-	err := r.pool.QueryRow(ctx, `SELECT id, idempotency_key, user_id, device_uid_hash, device_model, transport, state, correlation_id, created_at, expires_at, COALESCE(failure_code, '') FROM provisioning_sessions WHERE id = $1`, id).Scan(&s.ID, &s.IdempotencyKey, &s.UserID, &deviceHash, &s.DeviceModel, &s.Transport, &s.State, &s.Correlation, &s.CreatedAt, &s.ExpiresAt, &s.FailureCode)
+	err := r.pool.QueryRow(ctx, `SELECT id, idempotency_key, user_id, device_uid_hash, device_model, transport, state, correlation_id, created_at, expires_at, COALESCE(failure_code, ''), COALESCE(payment_token_ref, ''), COALESCE(wrapped_payload_ref, '') FROM provisioning_sessions WHERE id = $1`, id).Scan(&s.ID, &s.IdempotencyKey, &s.UserID, &deviceHash, &s.DeviceModel, &s.Transport, &s.State, &s.Correlation, &s.CreatedAt, &s.ExpiresAt, &s.FailureCode, &s.PaymentTokenRef, &s.WrappedPayloadRef)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ProvisioningSession{}, ErrNotFound
 	}
@@ -51,7 +51,7 @@ func (r *SessionRepository) Get(ctx context.Context, id string) (domain.Provisio
 }
 
 func (r *SessionRepository) Save(ctx context.Context, s domain.ProvisioningSession) error {
-	_, err := r.pool.Exec(ctx, `INSERT INTO provisioning_sessions (id, idempotency_key, user_id, device_uid_hash, device_model, transport, state, correlation_id, created_at, expires_at, failure_code) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, '')) ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, failure_code = EXCLUDED.failure_code`, s.ID, s.IdempotencyKey, s.UserID, hashDeviceUID(s.DeviceUID), s.DeviceModel, s.Transport, s.State, s.Correlation, s.CreatedAt, s.ExpiresAt, s.FailureCode)
+	_, err := r.pool.Exec(ctx, `INSERT INTO provisioning_sessions (id, idempotency_key, user_id, device_uid_hash, device_model, transport, state, correlation_id, created_at, expires_at, failure_code, payment_token_ref, wrapped_payload_ref) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, ''), NULLIF($12, ''), NULLIF($13, '')) ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, failure_code = EXCLUDED.failure_code, payment_token_ref = EXCLUDED.payment_token_ref, wrapped_payload_ref = EXCLUDED.wrapped_payload_ref`, s.ID, s.IdempotencyKey, s.UserID, hashDeviceUID(s.DeviceUID), s.DeviceModel, s.Transport, s.State, s.Correlation, s.CreatedAt, s.ExpiresAt, s.FailureCode, s.PaymentTokenRef, s.WrappedPayloadRef)
 	if err != nil {
 		return fmt.Errorf("save session: %w", err)
 	}

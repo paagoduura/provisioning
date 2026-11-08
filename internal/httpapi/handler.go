@@ -126,6 +126,28 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch action {
+	case "authenticate":
+		if _, ok := auth.PrincipalFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		result, err := h.provisioning.AuthenticateSession(r.Context(), sessionID)
+		if err != nil {
+			writeDomainError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	case "payment-provisioning":
+		if _, ok := auth.PrincipalFromContext(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		result, err := h.provisioning.ProvisionPayment(r.Context(), sessionID)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 	case "device-discovery":
 		result, err := h.provisioning.Discover(r.Context(), sessionID)
 		if err != nil {

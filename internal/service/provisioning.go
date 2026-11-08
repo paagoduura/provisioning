@@ -31,6 +31,13 @@ type TokenPort interface {
 	WrapToken(context.Context, string, string) (string, error)
 }
 
+var ErrPaymentIntegrationNotConfigured = errors.New("payment integration is not configured")
+
+type PersonalizationPort interface {
+	Transfer(context.Context, string, string) error
+	Verify(context.Context, string, string) error
+}
+
 type AuditPort interface {
 	Record(context.Context, audit.Event) error
 }
@@ -38,16 +45,19 @@ type AuditPort interface {
 type CreateInput struct{ UserID, DeviceUID, DeviceModel, Transport string }
 
 type Service struct {
-	repo   Repository
-	crypto CryptoPort
-	tokens TokenPort
-	audit  AuditPort
-	now    func() time.Time
+	repo         Repository
+	crypto       CryptoPort
+	tokens       TokenPort
+	personalizer PersonalizationPort
+	audit        AuditPort
+	now          func() time.Time
 }
 
 func New(repo Repository, crypto CryptoPort, tokens TokenPort, auditSink AuditPort) *Service {
 	return &Service{repo: repo, crypto: crypto, tokens: tokens, audit: auditSink, now: time.Now}
 }
+
+func (s *Service) SetPersonalizer(personalizer PersonalizationPort) { s.personalizer = personalizer }
 
 func (s *Service) Get(ctx context.Context, id string) (domain.ProvisioningSession, error) {
 	return s.repo.Get(ctx, id)
@@ -91,6 +101,134 @@ func (s *Service) Discover(ctx context.Context, id string) (domain.ProvisioningS
 
 func (s *Service) TransitionToAttested(ctx context.Context, id string) (domain.ProvisioningSession, error) {
 	return s.transition(ctx, id, domain.StateDeviceAttested)
+}
+
+func (s *Service) AuthenticateSession(ctx context.Context, id string) (domain.ProvisioningSession, error) {
+	return s.transition(ctx, id, domain.StateSessionAuthenticated)
+}
+
+// ProvisionPayment executes the certified-integration boundary in a durable,
+// retry-safe order. Provider and secure-element implementations are injected;
+// production uses fail-closed adapters until their approved contracts exist.
+func (s *Service) ProvisionPayment(ctx context.Context, id string) (domain.ProvisioningSession, error) {
+	current, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return current, err
+	}
+	if current.Expired(s.now()) {
+		return current, fmt.Errorf("session expired")
+	}
+	if current.State == domain.StateCompleted {
+		return current, nil
+	}
+	if current.State != domain.StateSessionAuthenticated && current.State != domain.StateTokenRequested && current.State != domain.StateTokenReceived && current.State != domain.StatePayloadWrapped && current.State != domain.StateTransferStarted && current.State != domain.StateTransferred && current.State != domain.StateDeviceVerified {
+		return current, fmt.Errorf("payment provisioning requires session authentication: %w", domain.ErrInvalidTransition)
+	}
+	if s.tokens == nil || s.personalizer == nil {
+		failed, _ := s.failProvisioning(ctx, current, "PAYMENT_INTEGRATION_NOT_CONFIGURED")
+		return failed, ErrPaymentIntegrationNotConfigured
+	}
+	if current.State == domain.StateSessionAuthenticated {
+		if current, err = s.transitionCurrent(ctx, current, domain.StateTokenRequested); err != nil {
+			return current, err
+		}
+		current, err = s.repo.Get(ctx, id)
+		if err != nil {
+			return current, err
+		}
+	}
+	if current.State == domain.StateTokenRequested {
+		tokenRef, requestErr := s.tokens.RequestToken(ctx, current.ID)
+		if requestErr != nil {
+			return s.failProvisioning(ctx, current, "TOKEN_REQUEST_FAILED")
+		}
+		if tokenRef == "" {
+			return s.failProvisioning(ctx, current, "TOKEN_RESPONSE_INVALID")
+		}
+		current.PaymentTokenRef = tokenRef
+		if _, err := s.transitionCurrent(ctx, current, domain.StateTokenReceived); err != nil {
+			return current, err
+		}
+		current, err = s.repo.Get(ctx, id)
+		if err != nil {
+			return current, err
+		}
+	}
+	if current.State == domain.StateTokenReceived {
+		payload, wrapErr := s.tokens.WrapToken(ctx, current.DeviceUID, current.PaymentTokenRef)
+		if wrapErr != nil {
+			return s.failProvisioning(ctx, current, "PAYLOAD_WRAP_FAILED")
+		}
+		if payload == "" {
+			return s.failProvisioning(ctx, current, "PAYLOAD_INVALID")
+		}
+		current.WrappedPayloadRef = payload
+		if _, err := s.transitionCurrent(ctx, current, domain.StatePayloadWrapped); err != nil {
+			return current, err
+		}
+		current, err = s.repo.Get(ctx, id)
+		if err != nil {
+			return current, err
+		}
+	}
+	if current.State == domain.StatePayloadWrapped {
+		if err := s.personalizer.Transfer(ctx, current.DeviceUID, current.WrappedPayloadRef); err != nil {
+			return s.failProvisioning(ctx, current, "PERSONALIZATION_FAILED")
+		}
+		if _, err := s.transitionCurrent(ctx, current, domain.StateTransferStarted); err != nil {
+			return current, err
+		}
+		current, err = s.repo.Get(ctx, id)
+		if err != nil {
+			return current, err
+		}
+	}
+	if current.State == domain.StateTransferStarted {
+		if _, err := s.transitionCurrent(ctx, current, domain.StateTransferred); err != nil {
+			return current, err
+		}
+		current, err = s.repo.Get(ctx, id)
+		if err != nil {
+			return current, err
+		}
+	}
+	if current.State == domain.StateTransferred {
+		if err := s.personalizer.Verify(ctx, current.DeviceUID, current.WrappedPayloadRef); err != nil {
+			return s.failProvisioning(ctx, current, "DEVICE_VERIFICATION_FAILED")
+		}
+		if _, err := s.transitionCurrent(ctx, current, domain.StateDeviceVerified); err != nil {
+			return current, err
+		}
+		current, err = s.repo.Get(ctx, id)
+		if err != nil {
+			return current, err
+		}
+	}
+	if current.State == domain.StateDeviceVerified {
+		return s.transitionCurrent(ctx, current, domain.StateCompleted)
+	}
+	return current, nil
+}
+
+func (s *Service) failProvisioning(ctx context.Context, current domain.ProvisioningSession, code string) (domain.ProvisioningSession, error) {
+	current.FailureCode = code
+	if current.State != domain.StateFailed {
+		_ = current.Transition(domain.StateFailed)
+	}
+	if err := s.repo.Save(ctx, current); err != nil {
+		return current, err
+	}
+	return current, errors.New(code)
+}
+
+func (s *Service) transitionCurrent(ctx context.Context, current domain.ProvisioningSession, next domain.ProvisioningState) (domain.ProvisioningSession, error) {
+	if err := current.Transition(next); err != nil {
+		return current, err
+	}
+	if err := s.repo.Save(ctx, current); err != nil {
+		return current, err
+	}
+	return current, nil
 }
 
 func (s *Service) Attest(ctx context.Context, id, deviceResponse string) (domain.ProvisioningSession, error) {

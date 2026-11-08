@@ -46,6 +46,8 @@ Successful provider verification is also bound to the durable device registry. T
 
 Slice 4A adds an optional real OAuth/OIDC boundary. Set `OIDC_ISSUER_URL`, `OIDC_AUDIENCE`, and `OIDC_REQUIRED=true` in production. The API performs live issuer discovery and JWKS-backed signature validation, binds session `user_id` to the token `sub` claim, and restricts session and device reads to that subject. Health and readiness remain public for load-balancer probes. The staging KMS gate remains backward-compatible when OIDC is not configured; the detailed acceptance requirements are in `SLICE_4A_CHECKLIST.md`.
 
+The first payment-wearable Slice 4 foundation is now implemented. Authenticated sessions can transition through `POST /v1/provisioning-sessions/{id}/authenticate` and invoke the durable `POST /v1/provisioning-sessions/{id}/payment-provisioning` orchestration. The orchestration persists token and wrapped-payload references, enforces ordered transitions, is safe to replay after completion, and fails closed until certified token and secure-element adapters are configured. Production no longer wires the development mock crypto or Interswitch adapters.
+
 For the release acceptance gate, use `scripts/run-staging-kms-gate.ps1` instead of starting the API manually. The gate verifies the checked-out revision, rebuilds `provisioning-api.exe`, refuses to use an already-listening port, starts a fresh API process with the current environment, waits for `/healthz` and `/readyz`, runs the E2E harness, reports the API logs on failure, and stops the process on completion. Run it from the repository root with `DATABASE_URL`, `AWS_KMS_KEY_ID`, `AWS_REGION`, and the AWS credential chain configured:
 
 ```powershell

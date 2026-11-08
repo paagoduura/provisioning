@@ -15,8 +15,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/paagoduura/provisioning/internal/adapters/memory"
-	"github.com/paagoduura/provisioning/internal/adapters/mock"
 	postgresadapter "github.com/paagoduura/provisioning/internal/adapters/postgres"
+	"github.com/paagoduura/provisioning/internal/adapters/production"
 	"github.com/paagoduura/provisioning/internal/attestation"
 	"github.com/paagoduura/provisioning/internal/audit"
 	"github.com/paagoduura/provisioning/internal/auth"
@@ -80,7 +80,8 @@ func main() {
 		revocationChecker = memoryAttestation
 		log.Warn("persistence_selected", "provider", "memory", "warning", "development_only")
 	}
-	provisioning := service.New(repo, mock.CryptoService{}, mock.InterswitchAdapter{}, auditSink)
+	provisioning := service.New(repo, production.UnavailableCrypto{}, production.UnavailableTokenProvider{}, auditSink)
+	provisioning.SetPersonalizer(production.UnavailablePersonalizer{})
 	verifiers := attestation.ProviderRouter{}
 	providerEnabled := func(provider string) bool {
 		return cfg.AttestationProvider == "" || cfg.AttestationProvider == provider
