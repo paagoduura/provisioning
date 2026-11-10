@@ -24,6 +24,7 @@ const (
 )
 
 var ErrInvalidTransition = errors.New("invalid provisioning state transition")
+var ErrSessionNotFound = errors.New("session not found")
 
 var transitions = map[ProvisioningState]map[ProvisioningState]bool{
 	StateCreated:              {StateDeviceDiscovered: true, StateFailed: true},

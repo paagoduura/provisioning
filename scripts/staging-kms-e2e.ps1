@@ -8,6 +8,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$SupabaseAccessToken = $env:SUPABASE_ACCESS_TOKEN
+if ([string]::IsNullOrWhiteSpace($SupabaseAccessToken)) {
+    throw 'Set SUPABASE_ACCESS_TOKEN to a valid Supabase Auth user access token before running this walkthrough.'
+}
+$ApiAuthHeaders = @{ Authorization = "Bearer $SupabaseAccessToken" }
 
 function ConvertTo-Base64Url([byte[]]$Bytes) {
     return [Convert]::ToBase64String($Bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
@@ -15,8 +20,10 @@ function ConvertTo-Base64Url([byte[]]$Bytes) {
 
 function Invoke-JsonPost([string]$Uri, [object]$Body, [hashtable]$Headers = @{}) {
     $json = $Body | ConvertTo-Json -Compress -Depth 8
+    $requestHeaders = @{ Authorization = "Bearer $SupabaseAccessToken" }
+    foreach ($headerName in $Headers.Keys) { $requestHeaders[$headerName] = $Headers[$headerName] }
     try {
-        return Invoke-RestMethod -Method Post -Uri $Uri -Headers $Headers -ContentType 'application/json' -Body $json
+        return Invoke-RestMethod -Method Post -Uri $Uri -Headers $requestHeaders -ContentType 'application/json' -Body $json
     }
     catch {
         $response = $_.Exception.Response
@@ -36,7 +43,7 @@ function Invoke-JsonPost([string]$Uri, [object]$Body, [hashtable]$Headers = @{})
 function Invoke-ExpectedReplay([string]$Uri, [object]$Body) {
     $json = $Body | ConvertTo-Json -Compress -Depth 8
     try {
-        Invoke-RestMethod -Method Post -Uri $Uri -ContentType 'application/json' -Body $json | Out-Null
+        Invoke-RestMethod -Method Post -Uri $Uri -Headers $ApiAuthHeaders -ContentType 'application/json' -Body $json | Out-Null
         throw 'Replay request unexpectedly succeeded.'
     }
     catch {
@@ -63,7 +70,7 @@ function Invoke-ExpectedReplay([string]$Uri, [object]$Body) {
 function Invoke-ExpectedFailure([string]$Uri, [object]$Body, [int]$ExpectedStatus, [string]$ExpectedCode) {
 	$json = $Body | ConvertTo-Json -Compress -Depth 8
 	try {
-		Invoke-RestMethod -Method Post -Uri $Uri -ContentType 'application/json' -Body $json | Out-Null
+        Invoke-RestMethod -Method Post -Uri $Uri -Headers $ApiAuthHeaders -ContentType 'application/json' -Body $json | Out-Null
 		throw "Negative request unexpectedly succeeded: $ExpectedCode"
 	}
 	catch {
@@ -110,7 +117,6 @@ try {
     $keyId = $KmsKeyId
 
     $session = Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions" @{
-        user_id = 'staging-e2e-user'
         device_uid = "staging-e2e-device-$runId"
         device_model = 'wearable-staging-fixture'
         transport = 'ble'
@@ -177,7 +183,7 @@ try {
         throw "Unexpected replay failure code: $($replay.failure_code)"
     }
 
-    $finalSession = Invoke-RestMethod -Method Get -Uri "$ApiBaseUrl/v1/provisioning-sessions/$sessionId"
+	$finalSession = Invoke-RestMethod -Method Get -Uri "$ApiBaseUrl/v1/provisioning-sessions/$sessionId" -Headers $ApiAuthHeaders
 	if ($finalSession.state -ne 'device_attested') {
 		throw "Session did not transition to device_attested: $($finalSession.state)"
 	}
@@ -185,7 +191,6 @@ try {
 	# Use a fresh session/challenge for negative cryptographic and binding tests.
 	$negativeRunId = [guid]::NewGuid().ToString('N')
 	$negativeSession = Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions" @{
-		user_id = 'staging-e2e-negative-user'
 		device_uid = "staging-e2e-negative-device-$negativeRunId"
 		device_model = 'wearable-staging-fixture'
 		transport = 'ble'

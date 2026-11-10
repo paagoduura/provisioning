@@ -2,13 +2,12 @@ package memory
 
 import (
 	"context"
-	"errors"
 	"sync"
 
 	"github.com/paagoduura/provisioning/internal/domain"
 )
 
-var ErrNotFound = errors.New("session not found")
+var ErrNotFound = domain.ErrSessionNotFound
 
 type SessionRepository struct {
 	mu             sync.RWMutex

@@ -10,7 +10,7 @@ func TestLoadDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.HTTPAddr != ":8080" || cfg.MaxRequestBodyBytes != 1<<20 {
+	if cfg.HTTPAddr != ":8080" || cfg.MaxRequestBodyBytes != 1<<20 || cfg.SupabaseAuthIssuer != "https://haytetewtgbfxnolrhjz.supabase.co/auth/v1" || cfg.SupabaseAuthAudience != "authenticated" {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 }

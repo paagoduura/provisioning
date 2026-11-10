@@ -11,7 +11,7 @@ import (
 	"github.com/paagoduura/provisioning/internal/domain"
 )
 
-var ErrNotFound = errors.New("session not found")
+var ErrNotFound = domain.ErrSessionNotFound
 
 type SessionRepository struct{ pool *pgxpool.Pool }
 

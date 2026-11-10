@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -11,9 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/paagoduura/provisioning/internal/adapters/memory"
 	"github.com/paagoduura/provisioning/internal/attestation"
+	"github.com/paagoduura/provisioning/internal/domain"
 	"github.com/paagoduura/provisioning/internal/service"
+	"github.com/paagoduura/provisioning/internal/supabaseauth"
 )
 
 type Handler struct {
@@ -21,20 +23,27 @@ type Handler struct {
 	provisioning *service.Service
 	attestation  *attestation.Service
 	maxBodyBytes int64
+	verifier     TokenVerifier
 }
 
-func New(log *slog.Logger, provisioning *service.Service, attestationService *attestation.Service, maxBodyBytes int64) *Handler {
-	return &Handler{log: log, provisioning: provisioning, attestation: attestationService, maxBodyBytes: maxBodyBytes}
+type TokenVerifier interface {
+	Verify(context.Context, string) (string, error)
+}
+
+func New(log *slog.Logger, provisioning *service.Service, attestationService *attestation.Service, maxBodyBytes int64, verifier TokenVerifier) *Handler {
+	return &Handler{log: log, provisioning: provisioning, attestation: attestationService, maxBodyBytes: maxBodyBytes, verifier: verifier}
 }
 
 func (h *Handler) Routes() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", h.health)
-	mux.HandleFunc("GET /readyz", h.ready)
-	mux.HandleFunc("POST /v1/provisioning-sessions", h.createSession)
-	mux.HandleFunc("GET /v1/provisioning-sessions/", h.getSession)
-	mux.HandleFunc("POST /v1/provisioning-sessions/", h.sessionAction)
-	return requestID(securityHeaders(maxBody(h.maxBodyBytes, logging(h.log, mux))))
+	publicMux := http.NewServeMux()
+	publicMux.HandleFunc("GET /healthz", h.health)
+	publicMux.HandleFunc("GET /readyz", h.ready)
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("POST /v1/provisioning-sessions", h.createSession)
+	apiMux.HandleFunc("GET /v1/provisioning-sessions/", h.getSession)
+	apiMux.HandleFunc("POST /v1/provisioning-sessions/", h.sessionAction)
+	publicMux.Handle("/v1/", authenticate(h.verifier, apiMux))
+	return requestID(securityHeaders(maxBody(h.maxBodyBytes, logging(h.log, publicMux))))
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
@@ -50,7 +59,6 @@ func (h *Handler) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 type createRequest struct {
-	UserID      string `json:"user_id"`
 	DeviceUID   string `json:"device_uid"`
 	DeviceModel string `json:"device_model"`
 	Transport   string `json:"transport"`
@@ -63,9 +71,14 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	result, existing, err := h.provisioning.Create(r.Context(), service.CreateInput{UserID: req.UserID, DeviceUID: req.DeviceUID, DeviceModel: req.DeviceModel, Transport: req.Transport}, r.Header.Get("Idempotency-Key"))
+	userID := authenticatedSubject(r.Context())
+	result, existing, err := h.provisioning.Create(r.Context(), service.CreateInput{UserID: userID, DeviceUID: req.DeviceUID, DeviceModel: req.DeviceModel, Transport: req.Transport}, r.Header.Get("Idempotency-Key"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if result.UserID != userID {
+		writeError(w, http.StatusConflict, "idempotency key already belongs to another session")
 		return
 	}
 	status := http.StatusCreated
@@ -92,6 +105,9 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID, action := parts[0], parts[1]
+	if !h.requireSessionOwner(w, r, sessionID) {
+		return
+	}
 	switch action {
 	case "device-discovery":
 		result, err := h.provisioning.Discover(r.Context(), sessionID)
@@ -142,7 +158,7 @@ func writeDomainError(w http.ResponseWriter, err error) {
 	if errors.Is(err, attestation.ErrUnsupportedProvider) {
 		status = http.StatusNotImplemented
 	}
-	if errors.Is(err, memory.ErrNotFound) || errors.Is(err, attestation.ErrChallengeNotFound) {
+	if errors.Is(err, domain.ErrSessionNotFound) || errors.Is(err, attestation.ErrChallengeNotFound) {
 		status = http.StatusNotFound
 	}
 	writeError(w, status, err.Error())
@@ -182,14 +198,74 @@ func (h *Handler) getSession(w http.ResponseWriter, r *http.Request) {
 	}
 	result, err := h.provisioning.Get(r.Context(), id)
 	if err != nil {
-		if errors.Is(err, memory.ErrNotFound) {
+		if errors.Is(err, domain.ErrSessionNotFound) {
 			writeError(w, http.StatusNotFound, "session not found")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
+	if result.UserID != authenticatedSubject(r.Context()) {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) requireSessionOwner(w http.ResponseWriter, r *http.Request, id string) bool {
+	session, err := h.provisioning.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, domain.ErrSessionNotFound) {
+			writeError(w, http.StatusNotFound, "session not found")
+		} else {
+			writeError(w, http.StatusInternalServerError, "internal error")
+		}
+		return false
+	}
+	if session.UserID != authenticatedSubject(r.Context()) {
+		writeError(w, http.StatusNotFound, "session not found")
+		return false
+	}
+	return true
+}
+
+type subjectContextKey struct{}
+
+func authenticatedSubject(ctx context.Context) string {
+	subject, _ := ctx.Value(subjectContextKey{}).(string)
+	return subject
+}
+
+func authenticate(verifier TokenVerifier, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if verifier == nil {
+			writeError(w, http.StatusServiceUnavailable, "authentication unavailable")
+			return
+		}
+		parts := strings.Fields(r.Header.Get("Authorization"))
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+		subject, err := verifier.Verify(r.Context(), parts[1])
+		if err != nil {
+			if errors.Is(err, supabaseauth.ErrVerifierUnavailable) {
+				writeError(w, http.StatusServiceUnavailable, "authentication unavailable")
+				return
+			}
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeError(w, http.StatusUnauthorized, "invalid access token")
+			return
+		}
+		if subject == "" {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeError(w, http.StatusUnauthorized, "invalid access token")
+			return
+		}
+		ctx := context.WithValue(r.Context(), subjectContextKey{}, subject)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

@@ -21,6 +21,7 @@ import (
 	"github.com/paagoduura/provisioning/internal/config"
 	httpapi "github.com/paagoduura/provisioning/internal/httpapi"
 	"github.com/paagoduura/provisioning/internal/service"
+	"github.com/paagoduura/provisioning/internal/supabaseauth"
 )
 
 func main() {
@@ -30,6 +31,14 @@ func main() {
 		log.Error("invalid_config", "error", err)
 		os.Exit(1)
 	}
+	authCtx, authCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	authVerifier, err := supabaseauth.NewVerifier(authCtx, cfg.SupabaseAuthIssuer, cfg.SupabaseAuthAudience, nil)
+	authCancel()
+	if err != nil {
+		log.Error("supabase_auth_initialization_failed", "error", err)
+		os.Exit(1)
+	}
+	log.Info("authentication_selected", "provider", "supabase_auth", "issuer", cfg.SupabaseAuthIssuer, "audience", cfg.SupabaseAuthAudience)
 	var repo service.Repository
 	var auditSink service.AuditPort
 	var attestationRepo attestation.ChallengeRepository
@@ -109,7 +118,7 @@ func main() {
 	}
 	attestationService := attestation.New(attestationRepo, attestationRecords, verifier, provisioning, auditSink)
 	attestationService.SetRevocationChecker(revocationChecker)
-	server := &http.Server{Addr: cfg.HTTPAddr, Handler: httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes).Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+	server := &http.Server{Addr: cfg.HTTPAddr, Handler: httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes, authVerifier).Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go func() {
