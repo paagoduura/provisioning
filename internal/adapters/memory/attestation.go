@@ -2,7 +2,6 @@ package memory
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
@@ -12,12 +11,12 @@ import (
 type AttestationRepository struct {
 	mu         sync.Mutex
 	challenges map[string]attestation.Challenge
-	records    []attestation.VerifiedResult
+	records    map[string]attestation.VerifiedResult
 	revoked    map[string]string
 }
 
 func NewAttestationRepository() *AttestationRepository {
-	return &AttestationRepository{challenges: make(map[string]attestation.Challenge), revoked: make(map[string]string)}
+	return &AttestationRepository{challenges: make(map[string]attestation.Challenge), records: make(map[string]attestation.VerifiedResult), revoked: make(map[string]string)}
 }
 func (r *AttestationRepository) Create(ctx context.Context, c attestation.Challenge) error {
 	r.mu.Lock()
@@ -52,22 +51,15 @@ func (r *AttestationRepository) Consume(ctx context.Context, id string, now time
 	r.challenges[id] = c
 	return c, nil
 }
-func (r *AttestationRepository) SaveAttestation(ctx context.Context, sessionID string, result attestation.VerifiedResult, now time.Time) error {
+func (r *AttestationRepository) SaveAttestationIfCounterAdvances(ctx context.Context, sessionID string, result attestation.VerifiedResult, now time.Time) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.records = append(r.records, result)
-	return nil
-}
-func (r *AttestationRepository) LatestCounter(ctx context.Context, sessionID, provider, keyID string) (uint64, bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for i := len(r.records) - 1; i >= 0; i-- {
-		result := r.records[i]
-		if result.Provider == provider && result.KeyID == keyID {
-			return result.Counter, true, nil
-		}
+	key := result.Provider + "\x00" + result.KeyID
+	if previous, ok := r.records[key]; ok && result.Counter <= previous.Counter {
+		return false, nil
 	}
-	return 0, false, nil
+	r.records[key] = result
+	return true, nil
 }
 func (r *AttestationRepository) Revoke(provider, keyID, reason string) {
 	r.mu.Lock()
@@ -80,5 +72,3 @@ func (r *AttestationRepository) IsRevoked(ctx context.Context, provider, keyID s
 	_, ok := r.revoked[provider+"\x00"+keyID]
 	return ok, nil
 }
-
-var _ = errors.New

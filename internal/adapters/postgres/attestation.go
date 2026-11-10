@@ -58,23 +58,29 @@ func (r *AttestationRepository) Consume(ctx context.Context, id string, now time
 	}
 	return c, nil
 }
-func (r *AttestationRepository) SaveAttestation(ctx context.Context, sessionID string, result attestation.VerifiedResult, now time.Time) error {
-	_, err := r.pool.Exec(ctx, `INSERT INTO device_attestations (session_id, provider, key_id, counter, trust_level, created_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (session_id, provider, key_id) DO UPDATE SET counter = EXCLUDED.counter, trust_level = EXCLUDED.trust_level, created_at = EXCLUDED.created_at`, sessionID, result.Provider, result.KeyID, result.Counter, result.TrustLevel, now)
+func (r *AttestationRepository) SaveAttestationIfCounterAdvances(ctx context.Context, sessionID string, result attestation.VerifiedResult, now time.Time) (bool, error) {
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("save device attestation: %w", err)
+		return false, fmt.Errorf("begin attestation counter transaction: %w", err)
 	}
-	return nil
-}
-func (r *AttestationRepository) LatestCounter(ctx context.Context, sessionID, provider, keyID string) (uint64, bool, error) {
-	var counter uint64
-	err := r.pool.QueryRow(ctx, `SELECT counter FROM device_attestations WHERE session_id = $1 AND provider = $2 AND key_id = $3 LIMIT 1`, sessionID, provider, keyID).Scan(&counter)
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var saved int
+	err = tx.QueryRow(ctx, `INSERT INTO device_attestation_counters (provider, key_id, counter, updated_at) VALUES ($1, $2, $3, $4) ON CONFLICT (provider, key_id) DO UPDATE SET counter = EXCLUDED.counter, updated_at = EXCLUDED.updated_at WHERE device_attestation_counters.counter < EXCLUDED.counter RETURNING 1`, result.Provider, result.KeyID, result.Counter, now).Scan(&saved)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, false, nil
+		return false, nil
 	}
 	if err != nil {
-		return 0, false, fmt.Errorf("get attestation counter: %w", err)
+		return false, fmt.Errorf("advance global device attestation counter: %w", err)
 	}
-	return counter, true, nil
+	_, err = tx.Exec(ctx, `INSERT INTO device_attestations (session_id, provider, key_id, counter, trust_level, created_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (session_id, provider, key_id) DO UPDATE SET counter = EXCLUDED.counter, trust_level = EXCLUDED.trust_level, created_at = EXCLUDED.created_at`, sessionID, result.Provider, result.KeyID, result.Counter, result.TrustLevel, now)
+	if err != nil {
+		return false, fmt.Errorf("save device attestation: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit device attestation: %w", err)
+	}
+	return true, nil
 }
 func (r *AttestationRepository) Revoke(ctx context.Context, provider, keyID, reason string, at time.Time) error {
 	_, err := r.pool.Exec(ctx, `INSERT INTO device_key_revocations (provider, key_id, reason_code, revoked_at) VALUES ($1, $2, $3, $4) ON CONFLICT (provider, key_id) DO UPDATE SET reason_code = EXCLUDED.reason_code, revoked_at = EXCLUDED.revoked_at`, provider, keyID, reason, at)

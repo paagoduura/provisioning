@@ -30,8 +30,9 @@ type ChallengeRepository interface {
 }
 
 type AttestationRecordRepository interface {
-	SaveAttestation(context.Context, string, VerifiedResult, time.Time) error
-	LatestCounter(context.Context, string, string, string) (uint64, bool, error)
+	// SaveAttestationIfCounterAdvances atomically persists a result only when
+	// its counter is greater than the currently stored counter for this key.
+	SaveAttestationIfCounterAdvances(context.Context, string, VerifiedResult, time.Time) (bool, error)
 }
 
 type RevocationChecker interface {
@@ -145,16 +146,15 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 	if result.Provider != input.Provider || result.KeyID != input.KeyID || result.TrustLevel == "" {
 		return VerifiedResult{}, errors.New("invalid verifier result")
 	}
-	if previous, exists, err := s.records.LatestCounter(ctx, sessionID, result.Provider, result.KeyID); err != nil {
-		return VerifiedResult{}, err
-	} else if exists && result.Counter <= previous {
-		return VerifiedResult{}, ErrCounterRollback
-	}
 	if _, err := s.challenges.Consume(ctx, input.ChallengeID, s.now()); err != nil {
 		return VerifiedResult{}, err
 	}
-	if err := s.records.SaveAttestation(ctx, sessionID, result, s.now()); err != nil {
+	advanced, err := s.records.SaveAttestationIfCounterAdvances(ctx, sessionID, result, s.now())
+	if err != nil {
 		return VerifiedResult{}, err
+	}
+	if !advanced {
+		return VerifiedResult{}, ErrCounterRollback
 	}
 	if _, err := s.transitioner.TransitionToAttested(ctx, sessionID); err != nil {
 		return VerifiedResult{}, err

@@ -45,3 +45,24 @@ func TestGooglePlayFailureHTTPMapping(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeRequestStrictlyAcceptsOneKnownJSONObject(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		body    string
+		wantErr bool
+	}{
+		{name: "valid object with whitespace", body: `{"user_id":"u1"}  `},
+		{name: "unknown field", body: `{"user_id":"u1","admin":true}`, wantErr: true},
+		{name: "second JSON value", body: `{"user_id":"u1"} {"user_id":"u2"}`, wantErr: true},
+		{name: "malformed trailing data", body: `{"user_id":"u1"} unexpected`, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var request createRequest
+			err := decodeRequest(bytes.NewBufferString(test.body), &request)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("decodeRequest error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+}

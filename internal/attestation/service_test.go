@@ -80,17 +80,17 @@ func (r *testRepo) Consume(ctx context.Context, id string, now time.Time) (Chall
 	r.challenges[id] = c
 	return c, nil
 }
-func (r *testRepo) SaveAttestation(ctx context.Context, sessionID string, result VerifiedResult, now time.Time) error {
-	r.records = append(r.records, result)
-	return nil
-}
-func (r *testRepo) LatestCounter(ctx context.Context, sessionID, provider, keyID string) (uint64, bool, error) {
+func (r *testRepo) SaveAttestationIfCounterAdvances(ctx context.Context, sessionID string, result VerifiedResult, now time.Time) (bool, error) {
 	for i := len(r.records) - 1; i >= 0; i-- {
-		if r.records[i].Provider == provider && r.records[i].KeyID == keyID {
-			return r.records[i].Counter, true, nil
+		if r.records[i].Provider == result.Provider && r.records[i].KeyID == result.KeyID {
+			if result.Counter <= r.records[i].Counter {
+				return false, nil
+			}
+			break
 		}
 	}
-	return 0, false, nil
+	r.records = append(r.records, result)
+	return true, nil
 }
 
 func TestChallengeIsBoundAndSingleUse(t *testing.T) {

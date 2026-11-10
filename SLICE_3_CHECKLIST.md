@@ -10,7 +10,7 @@
 | Request binding | Complete | Request hash is required and compared before verification |
 | Atomic replay protection | Complete | Verify-before-consume plus repository-level atomic consume |
 | Challenge reuse prevention | Complete | Used challenges return `ATTESTATION_CHALLENGE_REPLAY` |
-| Attestation counter policy | Complete | Stored counter must strictly increase for a provider key |
+| Attestation counter policy | Code complete; database rollout pending | Atomic provider/key counter spans sessions; migration `006_attestation_global_counters.sql` backfills the greatest existing counter and must be applied before deploying this code |
 | Revoked device/key rejection | Complete | Durable revocation table plus memory/SQL lookup; acceptance test passes |
 | Altered signature rejection | Complete in test verifier | Invalid Ed25519 signatures fail; real vendor assertions remain provider-specific |
 | Cloned/unknown key rejection | Complete in test verifier | Unknown key IDs fail closed |

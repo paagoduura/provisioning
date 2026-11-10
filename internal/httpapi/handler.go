@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -58,7 +59,7 @@ type createRequest struct {
 func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	var req createRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := decodeRequest(r.Body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
@@ -105,7 +106,7 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var req challengeRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeRequest(r.Body, &req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
@@ -121,7 +122,7 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var req attestation.Submission
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := decodeRequest(r.Body, &req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid JSON")
 			return
 		}
@@ -196,6 +197,23 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(value)
 }
+
+func decodeRequest(body io.Reader, destination any) error {
+	decoder := json.NewDecoder(body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("request body must contain exactly one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
