@@ -26,7 +26,7 @@ The API listens on `:8080` by default.
 
 Set `DATABASE_URL` to the Supabase connection string to use durable PostgreSQL sessions and audit events. If it is omitted, the service uses the development-only in-memory repository.
 
-When `ENVIRONMENT=staging` or `ENVIRONMENT=production`, `DATABASE_URL` is mandatory and startup fails closed rather than using memory persistence. Apply `migrations/001_init.sql` through `migrations/006_attestation_global_counters.sql` to the target Supabase project before starting the service. Migration 006 initializes a global provider/key counter from the greatest value already stored in `device_attestations`.
+When `ENVIRONMENT=staging` or `ENVIRONMENT=production`, `DATABASE_URL` is mandatory and startup fails closed rather than using memory persistence. Apply `migrations/001_init.sql` through `migrations/007_server_only_rls.sql` to the target Supabase project before starting the service. Migration 006 initializes a global provider/key counter from the greatest value already stored in `device_attestations`. Migration 007 enables RLS and revokes direct grants for `anon` and `authenticated` on the application tables.
 
 Set `AWS_KMS_KEY_ID` to enable the AWS KMS verifier. The API then accepts `provider=aws-kms` only when the submitted `key_id` exactly matches that configured key. The assertion is a base64url-encoded JSON envelope containing `signature` (base64url) and a positive `counter`; the signature covers the canonical challenge message, and the counter is persisted atomically per provider/key across provisioning sessions. The runtime loads AWS credentials through the standard AWS SDK credential chain and never receives a private key.
 
@@ -55,6 +55,8 @@ curl -X POST http://localhost:8080/v1/provisioning-sessions \\
 ## Security boundary
 
 The mobile app must never receive manufacturer master keys, HSM credentials, raw PAN, or long-lived provider credentials. The mock adapters intentionally return deterministic development values and must be replaced with certified integrations only after the device protocol, Interswitch contract, key ceremony, HSM policy, and compliance scope are approved.
+
+Supabase application tables are server-only: RLS is enabled without client-facing policies, and direct grants are revoked from `anon` and `authenticated`. The API must connect through a trusted privileged database role. Do not expose `DATABASE_URL` to clients. Direct Supabase REST access to these tables is intentionally denied; if a future client data path is required, add verified identity-to-owner mappings and narrowly scoped RLS policies before exposing it.
 
 ## Next implementation slices
 
