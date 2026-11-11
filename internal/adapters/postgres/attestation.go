@@ -73,7 +73,7 @@ func (r *AttestationRepository) SaveAttestationIfCounterAdvances(ctx context.Con
 	if err != nil {
 		return false, fmt.Errorf("advance global device attestation counter: %w", err)
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO device_attestations (session_id, provider, key_id, counter, trust_level, created_at) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (session_id, provider, key_id) DO UPDATE SET counter = EXCLUDED.counter, trust_level = EXCLUDED.trust_level, created_at = EXCLUDED.created_at`, sessionID, result.Provider, result.KeyID, result.Counter, result.TrustLevel, now)
+	_, err = tx.Exec(ctx, `INSERT INTO device_attestations (session_id, provider, key_id, counter, trust_level, public_key_der, bundle_version, environment, created_at) VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''), NULLIF($8, ''), $9) ON CONFLICT (session_id, provider, key_id) DO UPDATE SET counter = EXCLUDED.counter, trust_level = EXCLUDED.trust_level, public_key_der = COALESCE(EXCLUDED.public_key_der, device_attestations.public_key_der), bundle_version = COALESCE(EXCLUDED.bundle_version, device_attestations.bundle_version), environment = COALESCE(EXCLUDED.environment, device_attestations.environment), created_at = EXCLUDED.created_at`, sessionID, result.Provider, result.KeyID, result.Counter, result.TrustLevel, result.PublicKeyDER, result.BundleVersion, result.Environment, now)
 	if err != nil {
 		return false, fmt.Errorf("save device attestation: %w", err)
 	}
@@ -81,6 +81,30 @@ func (r *AttestationRepository) SaveAttestationIfCounterAdvances(ctx context.Con
 		return false, fmt.Errorf("commit device attestation: %w", err)
 	}
 	return true, nil
+}
+
+func (r *AttestationRepository) LookupAppleAppAttestKey(ctx context.Context, keyID string) (attestation.AppleAppAttestKey, error) {
+	var key attestation.AppleAppAttestKey
+	var publicKey []byte
+	var bundleVersion, environment *string
+	err := r.pool.QueryRow(ctx, `SELECT public_key_der, counter, bundle_version, environment FROM device_attestations WHERE provider = $1 AND key_id = $2 ORDER BY created_at DESC LIMIT 1`, attestation.AppleAppAttestProvider, keyID).Scan(&publicKey, &key.Counter, &bundleVersion, &environment)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return attestation.AppleAppAttestKey{}, attestation.ErrAppleUnavailable
+	}
+	if err != nil {
+		return attestation.AppleAppAttestKey{}, fmt.Errorf("lookup apple app attest key: %w", err)
+	}
+	if len(publicKey) == 0 {
+		return attestation.AppleAppAttestKey{}, attestation.ErrAppleUnavailable
+	}
+	key.PublicKeyDER = append([]byte(nil), publicKey...)
+	if bundleVersion != nil {
+		key.BundleVersion = *bundleVersion
+	}
+	if environment != nil {
+		key.Environment = *environment
+	}
+	return key, nil
 }
 func (r *AttestationRepository) Revoke(ctx context.Context, provider, keyID, reason string, at time.Time) error {
 	_, err := r.pool.Exec(ctx, `INSERT INTO device_key_revocations (provider, key_id, reason_code, revoked_at) VALUES ($1, $2, $3, $4) ON CONFLICT (provider, key_id) DO UPDATE SET reason_code = EXCLUDED.reason_code, revoked_at = EXCLUDED.revoked_at`, provider, keyID, reason, at)

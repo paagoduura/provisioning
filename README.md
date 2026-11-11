@@ -27,7 +27,7 @@ The API listens on `:8080` by default.
 
 Set `DATABASE_URL` to the Supabase connection string to use durable PostgreSQL sessions and audit events. If it is omitted, the service uses the development-only in-memory repository.
 
-When `ENVIRONMENT=staging` or `ENVIRONMENT=production`, `DATABASE_URL` is mandatory and startup fails closed rather than using memory persistence. Apply `migrations/001_init.sql` through `migrations/007_server_only_rls.sql` to the target Supabase project before starting the service. Migration 006 initializes a global provider/key counter from the greatest value already stored in `device_attestations`. Migration 007 enables RLS and revokes direct grants for `anon` and `authenticated` on the application tables.
+When `ENVIRONMENT=staging` or `ENVIRONMENT=production`, `DATABASE_URL` is mandatory and startup fails closed rather than using memory persistence. Apply `migrations/001_init.sql` through `migrations/008_apple_app_attest.sql` to the target Supabase project before starting the service. Migration 006 initializes a global provider/key counter from the greatest value already stored in `device_attestations`. Migration 007 enables RLS and revokes direct grants for `anon` and `authenticated` on the application tables. Migration 008 persists the public key extracted from a validated Apple App Attest object for subsequent assertion verification.
 
 The API verifies Supabase Auth access tokens against `SUPABASE_AUTH_ISSUER` and `SUPABASE_AUTH_AUDIENCE` (defaults for this project are shown in `.env.example`). It loads the project's public JWKS at startup, refreshes keys on rotation and every five minutes, and accepts only ES256 or RS256 tokens with the expected issuer, audience, expiration, a non-empty subject, and the `authenticated` role. This follows Supabase's [JWT verification guidance](https://supabase.com/docs/guides/auth/jwts) and [signing-key guidance](https://supabase.com/docs/guides/auth/signing-keys). All `/v1` routes require `Authorization: Bearer <access-token>`; health and readiness routes remain public. The `user_id` request field is no longer accepted: the verified `sub` claim becomes the session owner. A valid Supabase user login is required to obtain an access token for API use.
 
@@ -40,6 +40,8 @@ Email authentication is enabled by default in Supabase, but its built-in SMTP is
 Set `AWS_KMS_KEY_ID` to enable the AWS KMS verifier. The API then accepts `provider=aws-kms` only when the submitted `key_id` exactly matches that configured key. The assertion is a base64url-encoded JSON envelope containing `signature` (base64url) and a positive `counter`; the signature covers the canonical challenge message, and the counter is persisted atomically per provider/key across provisioning sessions. The runtime loads AWS credentials through the standard AWS SDK credential chain and never receives a private key.
 
 To enable the Google Play Integrity adapter, set `ATTESTATION_PROVIDER=google-play-integrity`, `GOOGLE_PLAY_INTEGRITY_PACKAGE_NAME` to the exact Android package name, and either `GOOGLE_PLAY_INTEGRITY_CREDENTIALS_FILE` to a secret-mounted service-account JSON file or `GOOGLE_PLAY_INTEGRITY_CREDENTIALS_JSON` from a protected secret store. The submitted assertion is a base64url-encoded JSON envelope containing the opaque `integrity_token`. The backend sends it to Google’s decode endpoint and validates the package name, request hash, `PLAY_RECOGNIZED` app verdict, licensing when required, configured certificate digest, and allowed device-integrity verdict. Service-account keys must not be committed or printed.
+
+To enable the Apple App Attest adapter, set `ATTESTATION_PROVIDER=apple-app-attest`, `APPLE_TEAM_ID`, `APPLE_BUNDLE_ID`, `APPLE_APP_ATTEST_ENVIRONMENT`, and `APPLE_APP_ATTEST_ROOT_CERT_FILE` to a secret-mounted copy of Apple’s official App Attestation Root CA certificate. Initial registration accepts a base64url JSON envelope containing `attestation_object`; subsequent verification accepts `assertion` and the exact client-data bytes. The verifier validates the Apple certificate chain, App ID hash, environment, credential ID, COSE P-256 key, nonce, validation category, bundle version, assertion signature, and monotonic counter. It has no software fallback and does not accept caller-supplied public keys.
 
 This repository change does not enable APIs, create service accounts, alter IAM, link Play Console, or access Google Cloud resources. Those operations remain an external deployment step. Until the Google project is linked to the Android application and valid production token fixtures are supplied, the provider must remain fail-closed in staging and production.
 
@@ -73,7 +75,7 @@ Every `/v1` call must carry a valid Supabase Auth user access token. The API val
 ## Next implementation slices
 
 1. Configure production Supabase email OTP/magic-link delivery and validate the real-user flow with `scripts/auth-email-otp-e2e.ps1` (implementation harness ready; external SMTP and live acceptance pending)
-2. Apple App Attest verifier with production certificate fixtures
+2. Apple App Attest genuine-device acceptance using the configured iOS app and environment
 3. Google Play Integrity production configuration and real-device fixture validation
 4. Real device registry and lifecycle controls
 5. HSM-backed Crypto Service over mTLS

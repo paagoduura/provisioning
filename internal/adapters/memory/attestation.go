@@ -61,6 +61,16 @@ func (r *AttestationRepository) SaveAttestationIfCounterAdvances(ctx context.Con
 	r.records[key] = result
 	return true, nil
 }
+
+func (r *AttestationRepository) LookupAppleAppAttestKey(ctx context.Context, keyID string) (attestation.AppleAppAttestKey, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	result, ok := r.records[attestation.AppleAppAttestProvider+"\x00"+keyID]
+	if !ok || len(result.PublicKeyDER) == 0 {
+		return attestation.AppleAppAttestKey{}, attestation.ErrAppleUnavailable
+	}
+	return attestation.AppleAppAttestKey{PublicKeyDER: append([]byte(nil), result.PublicKeyDER...), Counter: uint32(result.Counter), BundleVersion: result.BundleVersion, Environment: result.Environment}, nil
+}
 func (r *AttestationRepository) Revoke(provider, keyID, reason string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

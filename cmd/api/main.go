@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"log/slog"
 	"net/http"
 	"os"
@@ -111,7 +113,32 @@ func main() {
 		}
 		verifier = attestation.GooglePlayIntegrityVerifier{Client: http.DefaultClient, CredentialsJSON: credentials, PackageName: cfg.GooglePlayPackageName, RequireLicensed: cfg.GooglePlayRequireLicensed, MaxTokenAge: 5 * time.Minute, MaxClockSkew: 30 * time.Second}
 		log.Info("attestation_verifier_selected", "provider", attestation.GooglePlayIntegrityProvider, "package_name", cfg.GooglePlayPackageName)
-	case "apple-app-attest", "cloudhsm-pkcs11":
+	case "apple-app-attest":
+		lookup, ok := attestationRepo.(attestation.AppleAppAttestKeyLookup)
+		if !ok {
+			log.Error("apple_app_attest_key_store_unavailable")
+			os.Exit(1)
+		}
+		rootPEM, readErr := os.ReadFile(cfg.AppleRootCertificateFile)
+		if readErr != nil {
+			log.Error("apple_app_attest_root_certificate_failed", "error", readErr)
+			os.Exit(1)
+		}
+		rootBlock, _ := pem.Decode(rootPEM)
+		if rootBlock == nil {
+			log.Error("apple_app_attest_root_certificate_failed", "error", "PEM certificate not found")
+			os.Exit(1)
+		}
+		rootCertificate, parseErr := x509.ParseCertificate(rootBlock.Bytes)
+		if parseErr != nil {
+			log.Error("apple_app_attest_root_certificate_failed", "error", parseErr)
+			os.Exit(1)
+		}
+		roots := x509.NewCertPool()
+		roots.AddCert(rootCertificate)
+		verifier = attestation.AppleAppAttestVerifier{Root: roots, TeamID: cfg.AppleTeamID, BundleID: cfg.AppleBundleID, Environment: cfg.AppleEnvironment, Keys: lookup}
+		log.Info("attestation_verifier_selected", "provider", attestation.AppleAppAttestProvider, "environment", cfg.AppleEnvironment, "bundle_id", cfg.AppleBundleID)
+	case "cloudhsm-pkcs11":
 		log.Error("attestation_verifier_unavailable", "provider", cfg.AttestationProvider, "error", "provider adapter and external trust configuration are not installed")
 	default:
 		log.Warn("attestation_verifier_selected", "provider", "unavailable", "warning", "set ATTESTATION_PROVIDER and configure its approved verifier before production use")
