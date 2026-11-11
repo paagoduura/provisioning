@@ -176,6 +176,14 @@ func TestGooglePlayFailureHTTPMapping(t *testing.T) {
 	}
 }
 
+func TestConcurrentSessionUpdateMapsToConflict(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	writeDomainError(recorder, domain.ErrConcurrentUpdate)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("concurrent update returned %d, want %d", recorder.Code, http.StatusConflict)
+	}
+}
+
 func TestDecodeRequestStrictlyAcceptsOneKnownJSONObject(t *testing.T) {
 	for _, test := range []struct {
 		name    string

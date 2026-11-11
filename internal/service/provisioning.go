@@ -17,7 +17,7 @@ import (
 type Repository interface {
 	Create(context.Context, domain.ProvisioningSession) (domain.ProvisioningSession, bool, error)
 	Get(context.Context, string) (domain.ProvisioningSession, error)
-	Save(context.Context, domain.ProvisioningSession) error
+	Save(context.Context, domain.ProvisioningSession) (domain.ProvisioningSession, error)
 	FindByIdempotencyKey(context.Context, string) (domain.ProvisioningSession, error)
 	SaveIdempotencyKey(context.Context, string, string) error
 }
@@ -75,7 +75,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput, idempotencyKey 
 		return domain.ProvisioningSession{}, false, err
 	}
 	now := s.now()
-	result := domain.ProvisioningSession{ID: id, IdempotencyKey: idempotencyKey, UserID: input.UserID, DeviceUID: input.DeviceUID, DeviceModel: input.DeviceModel, Transport: input.Transport, State: domain.StateCreated, Correlation: id, CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute)}
+	result := domain.ProvisioningSession{ID: id, IdempotencyKey: idempotencyKey, UserID: input.UserID, DeviceUID: input.DeviceUID, DeviceModel: input.DeviceModel, Transport: input.Transport, State: domain.StateCreated, Version: 1, Correlation: id, CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute)}
 	if s.devices != nil {
 		device, registryErr := s.devices.EnsureDevice(ctx, input.UserID, input.DeviceUID, input.DeviceModel, input.Transport, now)
 		if registryErr != nil {
@@ -133,10 +133,11 @@ func (s *Service) transition(ctx context.Context, id string, next domain.Provisi
 	if err := current.Transition(next); err != nil {
 		return current, err
 	}
-	if err := s.repo.Save(ctx, current); err != nil {
+	updated, err := s.repo.Save(ctx, current)
+	if err != nil {
 		return current, err
 	}
-	return current, nil
+	return updated, nil
 }
 
 func randomID(prefix string) (string, error) {

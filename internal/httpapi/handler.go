@@ -289,6 +289,9 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 
 func writeDomainError(w http.ResponseWriter, err error) {
 	status := http.StatusBadRequest
+	if errors.Is(err, domain.ErrConcurrentUpdate) {
+		status = http.StatusConflict
+	}
 	if errors.Is(err, attestation.ErrUnsupportedProvider) {
 		status = http.StatusNotImplemented
 	}

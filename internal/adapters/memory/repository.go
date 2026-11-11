@@ -27,6 +27,9 @@ func (r *SessionRepository) Create(ctx context.Context, s domain.ProvisioningSes
 			return existing, false, nil
 		}
 	}
+	if s.Version == 0 {
+		s.Version = 1
+	}
 	r.sessions[s.ID] = s
 	r.idempotencyKey[s.IdempotencyKey] = s.ID
 	return s, true, nil
@@ -42,11 +45,19 @@ func (r *SessionRepository) Get(ctx context.Context, id string) (domain.Provisio
 	return s, nil
 }
 
-func (r *SessionRepository) Save(ctx context.Context, s domain.ProvisioningSession) error {
+func (r *SessionRepository) Save(ctx context.Context, s domain.ProvisioningSession) (domain.ProvisioningSession, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	existing, ok := r.sessions[s.ID]
+	if !ok {
+		return domain.ProvisioningSession{}, ErrNotFound
+	}
+	if s.Version == 0 || s.Version != existing.Version {
+		return domain.ProvisioningSession{}, domain.ErrConcurrentUpdate
+	}
+	s.Version++
 	r.sessions[s.ID] = s
-	return nil
+	return s, nil
 }
 
 func (r *SessionRepository) FindByIdempotencyKey(ctx context.Context, key string) (domain.ProvisioningSession, error) {

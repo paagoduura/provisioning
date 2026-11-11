@@ -25,6 +25,7 @@ const (
 
 var ErrInvalidTransition = errors.New("invalid provisioning state transition")
 var ErrSessionNotFound = errors.New("session not found")
+var ErrConcurrentUpdate = errors.New("provisioning session was concurrently updated")
 
 var transitions = map[ProvisioningState]map[ProvisioningState]bool{
 	StateCreated:              {StateDeviceDiscovered: true, StateFailed: true},
@@ -48,6 +49,7 @@ type ProvisioningSession struct {
 	DeviceModel    string            `json:"device_model"`
 	Transport      string            `json:"transport"`
 	State          ProvisioningState `json:"state"`
+	Version        int64             `json:"version"`
 	Correlation    string            `json:"correlation_id"`
 	CreatedAt      time.Time         `json:"created_at"`
 	ExpiresAt      time.Time         `json:"expires_at"`
