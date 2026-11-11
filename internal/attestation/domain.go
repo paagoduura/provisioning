@@ -6,12 +6,13 @@ import (
 )
 
 type Challenge struct {
-	ID          string
-	SessionID   string
-	Value       string
-	RequestHash string
-	ExpiresAt   time.Time
-	UsedAt      *time.Time
+	ID              string
+	SessionID       string
+	Value           string
+	RequestHash     string // server-generated digest; retained as the database-compatible field name
+	RequestDocument []byte
+	ExpiresAt       time.Time
+	UsedAt          *time.Time
 }
 
 type Submission struct {
@@ -19,7 +20,7 @@ type Submission struct {
 	Provider    string `json:"provider"`
 	KeyID       string `json:"key_id"`
 	Assertion   string `json:"assertion"`
-	RequestHash string `json:"request_hash"`
+	RequestHash string `json:"-"` // populated only by the server from the challenge
 }
 
 type VerifiedResult struct {

@@ -64,7 +64,7 @@ func New(challenges ChallengeRepository, records AttestationRecordRepository, ve
 func (s *Service) SetRevocationChecker(checker RevocationChecker) { s.revocations = checker }
 func (s *Service) SetDeviceRegistry(devices registry.Repository)  { s.devices = devices }
 
-func (s *Service) IssueChallenge(ctx context.Context, sessionID, requestHash string) (challenge Challenge, err error) {
+func (s *Service) IssueChallenge(ctx context.Context, sessionID string) (challenge Challenge, err error) {
 	defer func() {
 		if err != nil && s.audit != nil {
 			_ = s.audit.Record(ctx, audit.Event{SessionID: sessionID, Type: "ATTESTATION_CHALLENGE_FAILED", Result: "FAILURE", Reason: FailureCode(err), At: s.now()})
@@ -72,9 +72,6 @@ func (s *Service) IssueChallenge(ctx context.Context, sessionID, requestHash str
 	}()
 	if strings.TrimSpace(sessionID) == "" {
 		return Challenge{}, errors.New("session id is required")
-	}
-	if len(requestHash) > 500 {
-		return Challenge{}, errors.New("request hash exceeds 500 bytes")
 	}
 	session, err := s.transitioner.Get(ctx, sessionID)
 	if err != nil {
@@ -91,11 +88,15 @@ func (s *Service) IssueChallenge(ctx context.Context, sessionID, requestHash str
 		return Challenge{}, err
 	}
 	value := base64.RawURLEncoding.EncodeToString(raw)
+	_, requestDocument, requestDigest, err := buildCanonicalProvisioningRequest(session, value)
+	if err != nil {
+		return Challenge{}, err
+	}
 	idRaw := make([]byte, 16)
 	if _, err := rand.Read(idRaw); err != nil {
 		return Challenge{}, err
 	}
-	challenge = Challenge{ID: "att_" + base64.RawURLEncoding.EncodeToString(idRaw), SessionID: sessionID, Value: value, RequestHash: requestHash, ExpiresAt: s.now().Add(5 * time.Minute)}
+	challenge = Challenge{ID: "att_" + base64.RawURLEncoding.EncodeToString(idRaw), SessionID: sessionID, Value: value, RequestHash: requestDigest, RequestDocument: requestDocument, ExpiresAt: s.now().Add(5 * time.Minute)}
 	if err := s.challenges.Create(ctx, challenge); err != nil {
 		return Challenge{}, err
 	}
@@ -108,7 +109,7 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 			_ = s.audit.Record(ctx, audit.Event{SessionID: sessionID, Type: "DEVICE_ATTESTATION_FAILED", Result: "FAILURE", Reason: FailureCode(err), At: s.now()})
 		}
 	}()
-	if input.Provider == "" || input.KeyID == "" || input.Assertion == "" || input.RequestHash == "" {
+	if input.Provider == "" || input.KeyID == "" || input.Assertion == "" {
 		return VerifiedResult{}, errors.New("provider, key_id and assertion are required")
 	}
 	if input.ChallengeID == "" {
@@ -127,9 +128,9 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 	if challenge.SessionID != sessionID {
 		return VerifiedResult{}, ErrRequestBinding
 	}
-	if challenge.RequestHash != input.RequestHash {
-		return VerifiedResult{}, ErrRequestBinding
-	}
+	// RequestHash is an internal provider-port field. Never trust a value from
+	// the HTTP body; bind every verifier to the digest stored with this challenge.
+	input.RequestHash = challenge.RequestHash
 	session, err := s.transitioner.Get(ctx, sessionID)
 	if err != nil {
 		return VerifiedResult{}, err

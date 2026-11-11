@@ -198,6 +198,13 @@ func TestDecodeRequestStrictlyAcceptsOneKnownJSONObject(t *testing.T) {
 	}
 }
 
+func TestAttestationSubmissionRejectsClientRequestHash(t *testing.T) {
+	var submission attestation.Submission
+	if err := decodeRequest(bytes.NewBufferString(`{"challenge_id":"c","provider":"aws-kms","key_id":"k","assertion":"a","request_hash":"client-controlled"}`), &submission); err == nil {
+		t.Fatal("client-supplied request_hash was accepted")
+	}
+}
+
 type testVerifier map[string]string
 
 func (v testVerifier) Verify(_ context.Context, token string) (string, error) {

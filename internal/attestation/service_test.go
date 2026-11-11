@@ -97,13 +97,13 @@ func TestChallengeIsBoundAndSingleUse(t *testing.T) {
 	_, private, _ := ed25519.GenerateKey(rand.Reader)
 	public := private.Public().(ed25519.PublicKey)
 	repo := &testRepo{}
-	tr := &transitioner{sessions: map[string]domain.ProvisioningSession{"s1": {ID: "s1", State: domain.StateDeviceDiscovered, ExpiresAt: now().Add(10 * time.Minute)}}}
+	tr := &transitioner{sessions: map[string]domain.ProvisioningSession{"s1": {ID: "s1", DeviceID: "dev-test", DeviceModel: "wearable", Transport: "ble", State: domain.StateDeviceDiscovered, ExpiresAt: now().Add(10 * time.Minute)}}}
 	svc := New(repo, repo, DevEd25519Verifier{Keys: map[string]ed25519.PublicKey{"k1": public}}, tr, nil)
-	challenge, err := svc.IssueChallenge(context.Background(), "s1", "request-digest")
+	challenge, err := svc.IssueChallenge(context.Background(), "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	message := []byte(challenge.Value + "\nrequest-digest\ns1")
+	message := []byte(challenge.Value + "\n" + challenge.RequestHash + "\ns1")
 	assertion := base64.RawURLEncoding.EncodeToString(ed25519.Sign(private, message))
 	result, err := svc.Verify(context.Background(), "s1", Submission{ChallengeID: challenge.ID, Provider: "dev-ed25519", KeyID: "k1", Assertion: assertion, RequestHash: "request-digest"})
 	if err != nil {
@@ -122,12 +122,12 @@ func TestAlteredClonedAndRevokedDevicesFail(t *testing.T) {
 	public := private.Public().(ed25519.PublicKey)
 	repo := &testRepo{}
 	tr := &transitioner{sessions: map[string]domain.ProvisioningSession{
-		"s1": {ID: "s1", State: domain.StateDeviceDiscovered, ExpiresAt: now().Add(10 * time.Minute)},
-		"s2": {ID: "s2", State: domain.StateDeviceDiscovered, ExpiresAt: now().Add(10 * time.Minute)},
+		"s1": {ID: "s1", DeviceID: "dev-test", DeviceModel: "wearable", Transport: "ble", State: domain.StateDeviceDiscovered, ExpiresAt: now().Add(10 * time.Minute)},
+		"s2": {ID: "s2", DeviceID: "dev-test-2", DeviceModel: "wearable", Transport: "ble", State: domain.StateDeviceDiscovered, ExpiresAt: now().Add(10 * time.Minute)},
 	}}
 	svc := New(repo, repo, DevEd25519Verifier{Keys: map[string]ed25519.PublicKey{"k1": public}}, tr, nil)
 	svc.SetRevocationChecker(repo)
-	altered, err := svc.IssueChallenge(context.Background(), "s1", "request-digest")
+	altered, err := svc.IssueChallenge(context.Background(), "s1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,12 +137,12 @@ func TestAlteredClonedAndRevokedDevicesFail(t *testing.T) {
 	if _, err = svc.Verify(context.Background(), "s1", Submission{ChallengeID: altered.ID, Provider: "dev-ed25519", KeyID: "clone-key", Assertion: "fake", RequestHash: "request-digest"}); err == nil {
 		t.Fatal("cloned or unknown key unexpectedly passed")
 	}
-	valid, err := svc.IssueChallenge(context.Background(), "s2", "request-digest")
+	valid, err := svc.IssueChallenge(context.Background(), "s2")
 	if err != nil {
 		t.Fatal(err)
 	}
 	repo.Revoke("dev-ed25519", "k1")
-	message := []byte(valid.Value + "\nrequest-digest\ns2")
+	message := []byte(valid.Value + "\n" + valid.RequestHash + "\ns2")
 	assertion := base64.RawURLEncoding.EncodeToString(ed25519.Sign(private, message))
 	if _, err = svc.Verify(context.Background(), "s2", Submission{ChallengeID: valid.ID, Provider: "dev-ed25519", KeyID: "k1", Assertion: assertion, RequestHash: "request-digest"}); err != ErrDeviceRevoked {
 		t.Fatalf("expected revoked-device failure, got %v", err)
@@ -151,10 +151,10 @@ func TestAlteredClonedAndRevokedDevicesFail(t *testing.T) {
 
 func TestFailureAuditIsRedactedAndMapped(t *testing.T) {
 	repo := &testRepo{}
-	tr := &transitioner{sessions: map[string]domain.ProvisioningSession{"s1": {ID: "s1", State: domain.StateDeviceDiscovered, ExpiresAt: now().Add(10 * time.Minute)}}}
+	tr := &transitioner{sessions: map[string]domain.ProvisioningSession{"s1": {ID: "s1", DeviceID: "dev-test", DeviceModel: "wearable", Transport: "ble", State: domain.StateDeviceDiscovered, ExpiresAt: now().Add(10 * time.Minute)}}}
 	sink := audit.NewMemorySink()
 	svc := New(repo, repo, UnavailableVerifier{}, tr, sink)
-	challenge, err := svc.IssueChallenge(context.Background(), "s1", "request-digest")
+	challenge, err := svc.IssueChallenge(context.Background(), "s1")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -19,10 +19,12 @@ function ConvertTo-Base64Url([byte[]]$Bytes) {
 }
 
 function Invoke-JsonPost([string]$Uri, [object]$Body, [hashtable]$Headers = @{}) {
-    $json = $Body | ConvertTo-Json -Compress -Depth 8
+    $json = $null
+    if ($null -ne $Body) { $json = $Body | ConvertTo-Json -Compress -Depth 8 }
     $requestHeaders = @{ Authorization = "Bearer $SupabaseAccessToken" }
     foreach ($headerName in $Headers.Keys) { $requestHeaders[$headerName] = $Headers[$headerName] }
     try {
+        if ($null -eq $json) { return Invoke-RestMethod -Method Post -Uri $Uri -Headers $requestHeaders }
         return Invoke-RestMethod -Method Post -Uri $Uri -Headers $requestHeaders -ContentType 'application/json' -Body $json
     }
     catch {
@@ -113,7 +115,6 @@ try {
 
     $runId = [guid]::NewGuid().ToString('N')
     $idempotencyKey = "staging-kms-e2e-$runId"
-    $requestHash = "staging-kms-e2e-request-$runId"
     $keyId = $KmsKeyId
 
     $session = Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions" @{
@@ -127,10 +128,11 @@ try {
 
     Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions/$sessionId/device-discovery" @{} | Out-Null
 
-    $challengeResponse = Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions/$sessionId/attestation-challenges" @{ request_hash = $requestHash }
+    $challengeResponse = Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions/$sessionId/attestation-challenges" $null
     $challengeId = [string]$challengeResponse.id
     $challengeValue = [string]$challengeResponse.challenge
-    if ([string]::IsNullOrWhiteSpace($challengeId) -or [string]::IsNullOrWhiteSpace($challengeValue)) {
+    $requestHash = [string]$challengeResponse.request_digest
+    if ([string]::IsNullOrWhiteSpace($challengeId) -or [string]::IsNullOrWhiteSpace($challengeValue) -or [string]::IsNullOrWhiteSpace($requestHash)) {
         throw 'Challenge response did not contain the required fields.'
     }
 
@@ -169,7 +171,6 @@ try {
         provider = 'aws-kms'
         key_id = $keyId
         assertion = $assertion
-        request_hash = $requestHash
     }
     $result = Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions/$sessionId/attestation" $submission
 
@@ -197,8 +198,8 @@ try {
 	} @{ 'Idempotency-Key' = "staging-kms-e2e-negative-$negativeRunId" }
 	$negativeSessionId = [string]$negativeSession.id
 	Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions/$negativeSessionId/device-discovery" @{} | Out-Null
-	$negativeRequestHash = "staging-kms-e2e-negative-request-$negativeRunId"
-	$negativeChallenge = Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions/$negativeSessionId/attestation-challenges" @{ request_hash = $negativeRequestHash }
+	$negativeChallenge = Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions/$negativeSessionId/attestation-challenges" $null
+	$negativeRequestHash = [string]$negativeChallenge.request_digest
 	$negativeMessage = "$($negativeChallenge.challenge)`n$negativeRequestHash`n$negativeSessionId`n1"
 	$negativeMessagePath = Join-Path $temporaryDirectory 'negative-message.bin'
 	$negativeSignaturePath = Join-Path $temporaryDirectory 'negative-signature.b64'
@@ -217,11 +218,9 @@ try {
 		provider = 'aws-kms'
 		key_id = $keyId
 		assertion = $alteredAssertion
-		request_hash = $negativeRequestHash
-	} 422 'ATTESTATION_KMS_SIGNATURE_INVALID' | Out-Null
+		} 422 'ATTESTATION_KMS_SIGNATURE_INVALID' | Out-Null
 
-	$bindingRequestHash = "$negativeRequestHash-2"
-	$bindingChallenge = Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions/$negativeSessionId/attestation-challenges" @{ request_hash = $bindingRequestHash }
+	$bindingChallenge = Invoke-JsonPost "$ApiBaseUrl/v1/provisioning-sessions/$negativeSessionId/attestation-challenges" $null
 	$bindingAssertionJson = @{ signature = (ConvertTo-Base64Url $negativeSignatureBytes); counter = 1 } | ConvertTo-Json -Compress
 	$bindingAssertion = ConvertTo-Base64Url ([Text.Encoding]::UTF8.GetBytes($bindingAssertionJson))
 	Invoke-ExpectedFailure "$ApiBaseUrl/v1/provisioning-sessions/$negativeSessionId/attestation" @{
@@ -229,8 +228,7 @@ try {
 		provider = 'aws-kms'
 		key_id = $keyId
 		assertion = $bindingAssertion
-		request_hash = "$bindingRequestHash-tampered"
-	} 400 'ATTESTATION_REQUEST_BINDING_MISMATCH' | Out-Null
+		} 422 'ATTESTATION_KMS_SIGNATURE_INVALID' | Out-Null
 
 	Write-Output 'PASS: live KMS-to-API attestation succeeded; durable state, replay protection, altered-signature rejection, and request binding passed.'
 }

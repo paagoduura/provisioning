@@ -222,13 +222,12 @@ func writeRegistryError(w http.ResponseWriter, err error) {
 	writeJSON(w, status, map[string]string{"error": "device registry operation failed", "failure_code": code})
 }
 
-type challengeRequest struct {
-	RequestHash string `json:"request_hash"`
-}
 type challengeResponse struct {
-	ID        string    `json:"id"`
-	Challenge string    `json:"challenge"`
-	ExpiresAt time.Time `json:"expires_at"`
+	ID            string          `json:"id"`
+	Challenge     string          `json:"challenge"`
+	Request       json.RawMessage `json:"request"`
+	RequestDigest string          `json:"request_digest"`
+	ExpiresAt     time.Time       `json:"expires_at"`
 }
 
 func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
@@ -255,17 +254,18 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusServiceUnavailable, "attestation service unavailable")
 			return
 		}
-		var req challengeRequest
-		if err := decodeRequest(r.Body, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid JSON")
+		defer r.Body.Close()
+		var unexpected json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&unexpected); err != io.EOF {
+			writeError(w, http.StatusBadRequest, "attestation challenge requests must have an empty body")
 			return
 		}
-		result, err := h.attestation.IssueChallenge(r.Context(), sessionID, req.RequestHash)
+		result, err := h.attestation.IssueChallenge(r.Context(), sessionID)
 		if err != nil {
 			writeAttestationError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusCreated, challengeResponse{ID: result.ID, Challenge: result.Value, ExpiresAt: result.ExpiresAt})
+		writeJSON(w, http.StatusCreated, challengeResponse{ID: result.ID, Challenge: result.Value, Request: json.RawMessage(result.RequestDocument), RequestDigest: result.RequestHash, ExpiresAt: result.ExpiresAt})
 	case "attestation":
 		if h.attestation == nil {
 			writeError(w, http.StatusServiceUnavailable, "attestation service unavailable")

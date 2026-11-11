@@ -81,15 +81,15 @@ type appleAssertionObject struct {
 }
 
 type appleClientData struct {
-	Challenge   string `json:"challenge"`
-	RequestHash string `json:"request_hash"`
+	Challenge     string `json:"challenge"`
+	RequestDigest string `json:"request_digest"`
 }
 
 // Verify accepts a base64url JSON envelope. Initial registration uses
 // {"attestation_object":"...","client_data":"..."}; subsequent requests
 // use {"assertion":"...","client_data":"..."}. client_data is the exact
 // UTF-8 JSON bytes signed by the iOS client and must contain the server
-// challenge and request hash.
+// challenge and server-computed request digest.
 func (v AppleAppAttestVerifier) Verify(ctx context.Context, challenge Challenge, input Submission) (VerifiedResult, error) {
 	if input.Provider != AppleAppAttestProvider {
 		return VerifiedResult{}, ErrUnsupportedProvider
@@ -334,7 +334,7 @@ func decodeCBORField(document map[string]cbor.RawMessage, key string, destinatio
 
 func validateAppleClientData(raw []byte, challenge Challenge, input Submission) error {
 	var data appleClientData
-	if json.Unmarshal(raw, &data) != nil || data.Challenge == "" || data.RequestHash == "" || data.Challenge != challenge.Value || data.RequestHash != input.RequestHash || data.RequestHash != challenge.RequestHash {
+	if json.Unmarshal(raw, &data) != nil || data.Challenge == "" || data.RequestDigest == "" || data.Challenge != challenge.Value || data.RequestDigest != input.RequestHash || data.RequestDigest != challenge.RequestHash {
 		return ErrAppleClientData
 	}
 	return nil

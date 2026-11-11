@@ -18,7 +18,11 @@ func NewAttestationRepository(pool *pgxpool.Pool) *AttestationRepository {
 	return &AttestationRepository{pool: pool}
 }
 func (r *AttestationRepository) Create(ctx context.Context, c attestation.Challenge) error {
-	_, err := r.pool.Exec(ctx, `INSERT INTO attestation_challenges (id, session_id, challenge_value, challenge_hash, request_hash, request_hash_value, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`, c.ID, c.SessionID, c.Value, digest(c.Value), digest(c.RequestHash), c.RequestHash, c.ExpiresAt)
+	requestDocument := c.RequestDocument
+	if len(requestDocument) == 0 {
+		requestDocument = []byte(`{}`)
+	}
+	_, err := r.pool.Exec(ctx, `INSERT INTO attestation_challenges (id, session_id, challenge_value, challenge_hash, request_hash, request_hash_value, request_document, expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, c.ID, c.SessionID, c.Value, digest(c.Value), digest(c.RequestHash), c.RequestHash, requestDocument, c.ExpiresAt)
 	if err != nil {
 		return fmt.Errorf("create attestation challenge: %w", err)
 	}
@@ -28,7 +32,7 @@ func (r *AttestationRepository) Get(ctx context.Context, id string) (attestation
 	var c attestation.Challenge
 	var challengeHash, requestHash []byte
 	var usedAt *time.Time
-	err := r.pool.QueryRow(ctx, `SELECT id, session_id, challenge_value, challenge_hash, request_hash, request_hash_value, expires_at, used_at FROM attestation_challenges WHERE id = $1`, id).Scan(&c.ID, &c.SessionID, &c.Value, &challengeHash, &requestHash, &c.RequestHash, &c.ExpiresAt, &usedAt)
+	err := r.pool.QueryRow(ctx, `SELECT id, session_id, challenge_value, challenge_hash, request_hash, request_hash_value, request_document, expires_at, used_at FROM attestation_challenges WHERE id = $1`, id).Scan(&c.ID, &c.SessionID, &c.Value, &challengeHash, &requestHash, &c.RequestHash, &c.RequestDocument, &c.ExpiresAt, &usedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return attestation.Challenge{}, attestation.ErrChallengeNotFound
 	}
@@ -41,7 +45,7 @@ func (r *AttestationRepository) Get(ctx context.Context, id string) (attestation
 func (r *AttestationRepository) Consume(ctx context.Context, id string, now time.Time) (attestation.Challenge, error) {
 	var c attestation.Challenge
 	var challengeHash, requestHash []byte
-	err := r.pool.QueryRow(ctx, `UPDATE attestation_challenges SET used_at = $2 WHERE id = $1 AND used_at IS NULL AND expires_at > $2 RETURNING id, session_id, challenge_value, challenge_hash, request_hash, request_hash_value, expires_at, used_at`, id, now).Scan(&c.ID, &c.SessionID, &c.Value, &challengeHash, &requestHash, &c.RequestHash, &c.ExpiresAt, &c.UsedAt)
+	err := r.pool.QueryRow(ctx, `UPDATE attestation_challenges SET used_at = $2 WHERE id = $1 AND used_at IS NULL AND expires_at > $2 RETURNING id, session_id, challenge_value, challenge_hash, request_hash, request_hash_value, request_document, expires_at, used_at`, id, now).Scan(&c.ID, &c.SessionID, &c.Value, &challengeHash, &requestHash, &c.RequestHash, &c.RequestDocument, &c.ExpiresAt, &c.UsedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var usedAt *time.Time
 		err2 := r.pool.QueryRow(ctx, `SELECT used_at, expires_at FROM attestation_challenges WHERE id = $1`, id).Scan(&usedAt, &c.ExpiresAt)
