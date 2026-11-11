@@ -2,6 +2,8 @@ package attestation
 
 import "errors"
 
+import "github.com/paagoduura/provisioning/internal/registry"
+
 const (
 	FailureInvalidRequest       = "ATTESTATION_INVALID_REQUEST"
 	FailureChallengeNotFound    = "ATTESTATION_CHALLENGE_NOT_FOUND"
@@ -20,6 +22,9 @@ const (
 	FailureGoogleInvalidToken   = "ATTESTATION_GOOGLE_PLAY_INVALID_TOKEN"
 	FailureGoogleInvalidVerdict = "ATTESTATION_GOOGLE_PLAY_VERDICT_INVALID"
 	FailurePersistence          = "ATTESTATION_PERSISTENCE_FAILED"
+	FailureDeviceNotOwned       = "ATTESTATION_DEVICE_NOT_OWNED"
+	FailureDeviceUnavailable    = "ATTESTATION_DEVICE_UNAVAILABLE"
+	FailureKeyBoundElsewhere    = "ATTESTATION_KEY_BOUND_ELSEWHERE"
 )
 
 func FailureCode(err error) string {
@@ -34,8 +39,16 @@ func FailureCode(err error) string {
 		return FailureRequestBinding
 	case errors.Is(err, ErrCounterRollback):
 		return FailureCounterRollback
+	case errors.Is(err, registry.ErrCounterRollback):
+		return FailureCounterRollback
 	case errors.Is(err, ErrDeviceRevoked):
 		return FailureDeviceRevoked
+	case errors.Is(err, registry.ErrDeviceNotFound), errors.Is(err, registry.ErrDeviceNotOwned):
+		return FailureDeviceNotOwned
+	case errors.Is(err, registry.ErrDeviceUnavailable), errors.Is(err, registry.ErrKeyRevoked), errors.Is(err, registry.ErrKeyReplaced):
+		return FailureDeviceUnavailable
+	case errors.Is(err, registry.ErrKeyBoundElsewhere):
+		return FailureKeyBoundElsewhere
 	case errors.Is(err, ErrUnsupportedProvider):
 		return FailureProviderUnavailable
 	case errors.Is(err, ErrHSMUnavailable):

@@ -22,6 +22,7 @@ import (
 	"github.com/paagoduura/provisioning/internal/audit"
 	"github.com/paagoduura/provisioning/internal/config"
 	httpapi "github.com/paagoduura/provisioning/internal/httpapi"
+	"github.com/paagoduura/provisioning/internal/registry"
 	"github.com/paagoduura/provisioning/internal/service"
 	"github.com/paagoduura/provisioning/internal/supabaseauth"
 )
@@ -46,6 +47,7 @@ func main() {
 	var attestationRepo attestation.ChallengeRepository
 	var attestationRecords attestation.AttestationRecordRepository
 	var revocationChecker attestation.RevocationChecker
+	var deviceRegistry registry.Repository
 	var pool *pgxpool.Pool
 	if cfg.DatabaseURL != "" {
 		poolConfig, parseErr := pgxpool.ParseConfig(cfg.DatabaseURL)
@@ -76,6 +78,7 @@ func main() {
 		attestationRepo = postgresadapter.NewAttestationRepository(pool)
 		attestationRecords = postgresadapter.NewAttestationRepository(pool)
 		revocationChecker = attestationRepo.(attestation.RevocationChecker)
+		deviceRegistry = postgresadapter.NewDeviceRegistry(pool)
 		log.Info("persistence_selected", "provider", "supabase_postgres")
 	} else {
 		repo = memory.NewSessionRepository()
@@ -84,9 +87,11 @@ func main() {
 		attestationRepo = memoryAttestation
 		attestationRecords = memoryAttestation
 		revocationChecker = memoryAttestation
+		deviceRegistry = memory.NewDeviceRegistry()
 		log.Warn("persistence_selected", "provider", "memory", "warning", "development_only")
 	}
 	provisioning := service.New(repo, mock.CryptoService{}, mock.InterswitchAdapter{}, auditSink)
+	provisioning.SetDeviceRegistry(deviceRegistry)
 	var verifier attestation.Verifier = attestation.UnavailableVerifier{}
 	switch cfg.AttestationProvider {
 	case "aws-kms":
@@ -145,7 +150,10 @@ func main() {
 	}
 	attestationService := attestation.New(attestationRepo, attestationRecords, verifier, provisioning, auditSink)
 	attestationService.SetRevocationChecker(revocationChecker)
-	server := &http.Server{Addr: cfg.HTTPAddr, Handler: httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes, authVerifier).Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
+	attestationService.SetDeviceRegistry(deviceRegistry)
+	handler := httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes, authVerifier)
+	handler.SetDeviceRegistry(deviceRegistry)
+	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	go func() {

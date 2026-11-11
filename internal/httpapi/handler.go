@@ -14,6 +14,7 @@ import (
 
 	"github.com/paagoduura/provisioning/internal/attestation"
 	"github.com/paagoduura/provisioning/internal/domain"
+	"github.com/paagoduura/provisioning/internal/registry"
 	"github.com/paagoduura/provisioning/internal/service"
 	"github.com/paagoduura/provisioning/internal/supabaseauth"
 )
@@ -24,6 +25,7 @@ type Handler struct {
 	attestation  *attestation.Service
 	maxBodyBytes int64
 	verifier     TokenVerifier
+	devices      registry.Repository
 }
 
 type TokenVerifier interface {
@@ -34,12 +36,17 @@ func New(log *slog.Logger, provisioning *service.Service, attestationService *at
 	return &Handler{log: log, provisioning: provisioning, attestation: attestationService, maxBodyBytes: maxBodyBytes, verifier: verifier}
 }
 
+func (h *Handler) SetDeviceRegistry(devices registry.Repository) { h.devices = devices }
+
 func (h *Handler) Routes() http.Handler {
 	publicMux := http.NewServeMux()
 	publicMux.HandleFunc("GET /healthz", h.health)
 	publicMux.HandleFunc("GET /readyz", h.ready)
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("POST /v1/provisioning-sessions", h.createSession)
+	apiMux.HandleFunc("GET /v1/devices", h.listDevices)
+	apiMux.HandleFunc("POST /v1/devices", h.registerDevice)
+	apiMux.HandleFunc("POST /v1/devices/", h.deviceAction)
 	apiMux.HandleFunc("GET /v1/provisioning-sessions/", h.getSession)
 	apiMux.HandleFunc("POST /v1/provisioning-sessions/", h.sessionAction)
 	publicMux.Handle("/v1/", authenticate(h.verifier, apiMux))
@@ -86,6 +93,133 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusOK
 	}
 	writeJSON(w, status, result)
+}
+
+type deviceRequest struct {
+	DeviceUID   string `json:"device_uid"`
+	DeviceModel string `json:"device_model"`
+	Transport   string `json:"transport"`
+}
+
+type revokeDeviceRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (h *Handler) registerDevice(w http.ResponseWriter, r *http.Request) {
+	if h.devices == nil {
+		writeError(w, http.StatusServiceUnavailable, "device registry unavailable")
+		return
+	}
+	defer r.Body.Close()
+	var req deviceRequest
+	if err := decodeRequest(r.Body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.DeviceUID == "" || req.DeviceModel == "" || (req.Transport != "ble" && req.Transport != "nfc") {
+		writeError(w, http.StatusBadRequest, "device_uid, device_model and transport are required")
+		return
+	}
+	device, err := h.devices.EnsureDevice(r.Context(), authenticatedSubject(r.Context()), req.DeviceUID, req.DeviceModel, req.Transport, time.Now())
+	if err != nil {
+		writeRegistryError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, device)
+}
+
+func (h *Handler) listDevices(w http.ResponseWriter, r *http.Request) {
+	if h.devices == nil {
+		writeError(w, http.StatusServiceUnavailable, "device registry unavailable")
+		return
+	}
+	devices, err := h.devices.ListDevices(r.Context(), authenticatedSubject(r.Context()))
+	if err != nil {
+		writeRegistryError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, devices)
+}
+
+func (h *Handler) deviceAction(w http.ResponseWriter, r *http.Request) {
+	if h.devices == nil {
+		writeError(w, http.StatusServiceUnavailable, "device registry unavailable")
+		return
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/devices/"), "/"), "/")
+	if len(parts) != 2 || parts[0] == "" {
+		writeError(w, http.StatusBadRequest, "device action is required")
+		return
+	}
+	deviceID, action := parts[0], parts[1]
+	userID := authenticatedSubject(r.Context())
+	switch action {
+	case "revoke":
+		defer r.Body.Close()
+		var req revokeDeviceRequest
+		if err := decodeRequest(r.Body, &req); err != nil || strings.TrimSpace(req.Reason) == "" {
+			writeError(w, http.StatusBadRequest, "a revocation reason is required")
+			return
+		}
+		if err := h.devices.RevokeDevice(r.Context(), userID, deviceID, req.Reason, time.Now()); err != nil {
+			writeRegistryError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "revoked", "device_id": deviceID})
+	case "replace":
+		defer r.Body.Close()
+		var req deviceRequest
+		if err := decodeRequest(r.Body, &req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if req.DeviceUID == "" || req.DeviceModel == "" || (req.Transport != "ble" && req.Transport != "nfc") {
+			writeError(w, http.StatusBadRequest, "device_uid, device_model and transport are required")
+			return
+		}
+		device, err := h.devices.ReplaceDevice(r.Context(), userID, deviceID, req.DeviceUID, req.DeviceModel, req.Transport, time.Now())
+		if err != nil {
+			writeRegistryError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, device)
+	case "suspend", "resume", "retire":
+		defer r.Body.Close()
+		var req revokeDeviceRequest
+		if err := decodeRequest(r.Body, &req); err != nil || strings.TrimSpace(req.Reason) == "" {
+			writeError(w, http.StatusBadRequest, "a lifecycle reason is required")
+			return
+		}
+		next := registry.StateSuspended
+		if action == "resume" {
+			next = registry.StateActive
+		} else if action == "retire" {
+			next = registry.StateRetired
+		}
+		if err := h.devices.SetLifecycle(r.Context(), userID, deviceID, next, req.Reason, time.Now()); err != nil {
+			writeRegistryError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": string(next), "device_id": deviceID})
+	default:
+		writeError(w, http.StatusNotFound, "unknown device action")
+	}
+}
+
+func writeRegistryError(w http.ResponseWriter, err error) {
+	status := http.StatusUnprocessableEntity
+	code := "DEVICE_REGISTRY_ERROR"
+	switch {
+	case errors.Is(err, registry.ErrDeviceNotFound), errors.Is(err, registry.ErrDeviceNotOwned):
+		status, code = http.StatusNotFound, "DEVICE_NOT_FOUND"
+	case errors.Is(err, registry.ErrDeviceAlreadyOwned), errors.Is(err, registry.ErrKeyBoundElsewhere):
+		status, code = http.StatusConflict, "DEVICE_ALREADY_BOUND"
+	case errors.Is(err, registry.ErrDeviceUnavailable), errors.Is(err, registry.ErrKeyRevoked), errors.Is(err, registry.ErrKeyReplaced):
+		status, code = http.StatusConflict, "DEVICE_UNAVAILABLE"
+	case errors.Is(err, registry.ErrInvalidLifecycle):
+		status, code = http.StatusConflict, "INVALID_DEVICE_LIFECYCLE"
+	}
+	writeJSON(w, status, map[string]string{"error": "device registry operation failed", "failure_code": code})
 }
 
 type challengeRequest struct {
@@ -178,6 +312,10 @@ func writeAttestationError(w http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case attestation.FailureDeviceRevoked:
 		status = http.StatusForbidden
+	case attestation.FailureDeviceNotOwned:
+		status = http.StatusNotFound
+	case attestation.FailureDeviceUnavailable, attestation.FailureKeyBoundElsewhere:
+		status = http.StatusConflict
 	case attestation.FailureProviderUnavailable:
 		status = http.StatusNotImplemented
 	case attestation.FailureHSMUnavailable:

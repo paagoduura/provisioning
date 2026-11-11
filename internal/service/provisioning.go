@@ -11,6 +11,7 @@ import (
 	"github.com/paagoduura/provisioning/internal/adapters/memory"
 	"github.com/paagoduura/provisioning/internal/audit"
 	"github.com/paagoduura/provisioning/internal/domain"
+	"github.com/paagoduura/provisioning/internal/registry"
 )
 
 type Repository interface {
@@ -38,16 +39,19 @@ type AuditPort interface {
 type CreateInput struct{ UserID, DeviceUID, DeviceModel, Transport string }
 
 type Service struct {
-	repo   Repository
-	crypto CryptoPort
-	tokens TokenPort
-	audit  AuditPort
-	now    func() time.Time
+	repo    Repository
+	crypto  CryptoPort
+	tokens  TokenPort
+	audit   AuditPort
+	devices registry.Repository
+	now     func() time.Time
 }
 
 func New(repo Repository, crypto CryptoPort, tokens TokenPort, auditSink AuditPort) *Service {
 	return &Service{repo: repo, crypto: crypto, tokens: tokens, audit: auditSink, now: time.Now}
 }
+
+func (s *Service) SetDeviceRegistry(devices registry.Repository) { s.devices = devices }
 
 func (s *Service) Get(ctx context.Context, id string) (domain.ProvisioningSession, error) {
 	return s.repo.Get(ctx, id)
@@ -72,6 +76,13 @@ func (s *Service) Create(ctx context.Context, input CreateInput, idempotencyKey 
 	}
 	now := s.now()
 	result := domain.ProvisioningSession{ID: id, IdempotencyKey: idempotencyKey, UserID: input.UserID, DeviceUID: input.DeviceUID, DeviceModel: input.DeviceModel, Transport: input.Transport, State: domain.StateCreated, Correlation: id, CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute)}
+	if s.devices != nil {
+		device, registryErr := s.devices.EnsureDevice(ctx, input.UserID, input.DeviceUID, input.DeviceModel, input.Transport, now)
+		if registryErr != nil {
+			return domain.ProvisioningSession{}, false, registryErr
+		}
+		result.DeviceID = device.ID
+	}
 	stored, created, err := s.repo.Create(ctx, result)
 	if err != nil {
 		return domain.ProvisioningSession{}, false, err

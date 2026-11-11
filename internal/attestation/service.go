@@ -11,6 +11,7 @@ import (
 
 	"github.com/paagoduura/provisioning/internal/audit"
 	"github.com/paagoduura/provisioning/internal/domain"
+	"github.com/paagoduura/provisioning/internal/registry"
 )
 
 var (
@@ -50,6 +51,7 @@ type Service struct {
 	audit       audit.Sink
 	now         func() time.Time
 	revocations RevocationChecker
+	devices     registry.Repository
 }
 
 func New(challenges ChallengeRepository, records AttestationRecordRepository, verifier Verifier, transitioner interface {
@@ -60,6 +62,7 @@ func New(challenges ChallengeRepository, records AttestationRecordRepository, ve
 }
 
 func (s *Service) SetRevocationChecker(checker RevocationChecker) { s.revocations = checker }
+func (s *Service) SetDeviceRegistry(devices registry.Repository)  { s.devices = devices }
 
 func (s *Service) IssueChallenge(ctx context.Context, sessionID, requestHash string) (challenge Challenge, err error) {
 	defer func() {
@@ -127,6 +130,18 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 	if challenge.RequestHash != input.RequestHash {
 		return VerifiedResult{}, ErrRequestBinding
 	}
+	session, err := s.transitioner.Get(ctx, sessionID)
+	if err != nil {
+		return VerifiedResult{}, err
+	}
+	if s.devices != nil {
+		if session.DeviceID == "" {
+			return VerifiedResult{}, registry.ErrDeviceNotFound
+		}
+		if err := s.devices.AuthorizeAttestation(ctx, session.UserID, session.DeviceID, input.Provider, input.KeyID); err != nil {
+			return VerifiedResult{}, err
+		}
+	}
 	if s.revocations != nil {
 		revoked, checkErr := s.revocations.IsRevoked(ctx, input.Provider, input.KeyID)
 		if checkErr != nil {
@@ -145,6 +160,11 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 	}
 	if result.Provider != input.Provider || result.KeyID != input.KeyID || result.TrustLevel == "" {
 		return VerifiedResult{}, errors.New("invalid verifier result")
+	}
+	if s.devices != nil {
+		if err := s.devices.RegisterAttestation(ctx, session.UserID, session.DeviceID, registry.KeyMetadata{Provider: result.Provider, KeyID: result.KeyID, PublicKeyDER: result.PublicKeyDER, BundleVersion: result.BundleVersion, Environment: result.Environment, Counter: result.Counter}, s.now()); err != nil {
+			return VerifiedResult{}, err
+		}
 	}
 	if _, err := s.challenges.Consume(ctx, input.ChallengeID, s.now()); err != nil {
 		return VerifiedResult{}, err

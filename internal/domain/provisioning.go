@@ -43,6 +43,7 @@ type ProvisioningSession struct {
 	ID             string            `json:"id"`
 	IdempotencyKey string            `json:"-"`
 	UserID         string            `json:"user_id"`
+	DeviceID       string            `json:"device_id,omitempty"`
 	DeviceUID      string            `json:"device_uid"`
 	DeviceModel    string            `json:"device_model"`
 	Transport      string            `json:"transport"`
