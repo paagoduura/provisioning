@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
@@ -22,6 +23,7 @@ import (
 	"github.com/paagoduura/provisioning/internal/audit"
 	"github.com/paagoduura/provisioning/internal/config"
 	httpapi "github.com/paagoduura/provisioning/internal/httpapi"
+	"github.com/paagoduura/provisioning/internal/readiness"
 	"github.com/paagoduura/provisioning/internal/registry"
 	"github.com/paagoduura/provisioning/internal/service"
 	"github.com/paagoduura/provisioning/internal/supabaseauth"
@@ -153,6 +155,47 @@ func main() {
 	attestationService.SetDeviceRegistry(deviceRegistry)
 	handler := httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes, authVerifier)
 	handler.SetDeviceRegistry(deviceRegistry)
+	production := cfg.Environment == "staging" || cfg.Environment == "production"
+	readinessChecks := []readiness.Check{
+		{Name: "authentication_jwks", Required: true, Run: authVerifier.Ready},
+		{Name: "attestation_provider_configuration", Required: production, Run: func(context.Context) error {
+			if cfg.AttestationProvider == "" {
+				return attestation.ErrProviderReadiness
+			}
+			if _, unavailable := verifier.(attestation.UnavailableVerifier); unavailable {
+				return attestation.ErrProviderReadiness
+			}
+			return nil
+		}},
+		{Name: "attestation_provider_health", Required: production, Run: func(ctx context.Context) error {
+			return attestation.ProviderReady(ctx, verifier)
+		}},
+	}
+	if pool != nil {
+		readinessChecks = append(readinessChecks,
+			readiness.Check{Name: "database", Required: true, Run: pool.Ping},
+			readiness.Check{Name: "database_migration", Required: true, Run: func(ctx context.Context) error {
+				var applied bool
+				if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 12)`).Scan(&applied); err != nil {
+					return err
+				}
+				if !applied {
+					return errors.New("required migration 012 is not applied")
+				}
+				return nil
+			}},
+		)
+	} else {
+		readinessChecks = append(readinessChecks,
+			readiness.Check{Name: "database", Required: production, Run: func(context.Context) error {
+				return errors.New("durable database is not configured")
+			}},
+			readiness.Check{Name: "database_migration", Required: production, Run: func(context.Context) error {
+				return errors.New("durable database is not configured")
+			}},
+		)
+	}
+	handler.SetReadinessChecker(readiness.New(readinessChecks...))
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

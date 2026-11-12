@@ -160,6 +160,18 @@ func (v *Verifier) Verify(ctx context.Context, raw string) (string, error) {
 	return parsedClaims.Subject, nil
 }
 
+// Ready confirms that the verifier has a usable, non-expired asymmetric JWKS
+// cache. When the cache has expired it refreshes from the configured issuer;
+// the caller supplies the bounded readiness timeout.
+func (v *Verifier) Ready(ctx context.Context) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if len(v.keys) > 0 && v.now().Before(v.validUntil) {
+		return nil
+	}
+	return v.refreshLocked(ctx)
+}
+
 func (v *Verifier) key(ctx context.Context, kid string) (keyEntry, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()

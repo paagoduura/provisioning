@@ -14,6 +14,7 @@ import (
 
 	"github.com/paagoduura/provisioning/internal/attestation"
 	"github.com/paagoduura/provisioning/internal/domain"
+	"github.com/paagoduura/provisioning/internal/readiness"
 	"github.com/paagoduura/provisioning/internal/registry"
 	"github.com/paagoduura/provisioning/internal/service"
 	"github.com/paagoduura/provisioning/internal/supabaseauth"
@@ -26,6 +27,7 @@ type Handler struct {
 	maxBodyBytes int64
 	verifier     TokenVerifier
 	devices      registry.Repository
+	readiness    *readiness.Checker
 }
 
 type TokenVerifier interface {
@@ -37,6 +39,8 @@ func New(log *slog.Logger, provisioning *service.Service, attestationService *at
 }
 
 func (h *Handler) SetDeviceRegistry(devices registry.Repository) { h.devices = devices }
+
+func (h *Handler) SetReadinessChecker(checker *readiness.Checker) { h.readiness = checker }
 
 func (h *Handler) Routes() http.Handler {
 	publicMux := http.NewServeMux()
@@ -58,11 +62,22 @@ func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ready(w http.ResponseWriter, r *http.Request) {
-	if h.provisioning == nil {
-		writeError(w, http.StatusServiceUnavailable, "provisioning service unavailable")
+	if h.readiness == nil {
+		if h.provisioning == nil {
+			writeError(w, http.StatusServiceUnavailable, "provisioning service unavailable")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	report := h.readiness.Check(ctx)
+	status := http.StatusOK
+	if report.Status != "ok" {
+		status = http.StatusServiceUnavailable
+	}
+	writeJSON(w, status, report)
 }
 
 type createRequest struct {
