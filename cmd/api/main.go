@@ -23,10 +23,12 @@ import (
 	"github.com/paagoduura/provisioning/internal/audit"
 	"github.com/paagoduura/provisioning/internal/config"
 	httpapi "github.com/paagoduura/provisioning/internal/httpapi"
+	"github.com/paagoduura/provisioning/internal/ratelimit"
 	"github.com/paagoduura/provisioning/internal/readiness"
 	"github.com/paagoduura/provisioning/internal/registry"
 	"github.com/paagoduura/provisioning/internal/service"
 	"github.com/paagoduura/provisioning/internal/supabaseauth"
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -51,6 +53,40 @@ func main() {
 	var revocationChecker attestation.RevocationChecker
 	var deviceRegistry registry.Repository
 	var pool *pgxpool.Pool
+	var redisClient redis.UniversalClient
+	var abuseLimiter ratelimit.Limiter
+	if cfg.RedisURL != "" {
+		redisOptions, parseErr := redis.ParseURL(cfg.RedisURL)
+		if parseErr != nil {
+			log.Error("redis_config_failed", "error", parseErr)
+			os.Exit(1)
+		}
+		redisClient = redis.NewClient(redisOptions)
+		redisCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err = redisClient.Ping(redisCtx).Err()
+		cancel()
+		if err != nil {
+			_ = redisClient.Close()
+			if cfg.Environment == "staging" || cfg.Environment == "production" {
+				log.Error("redis_unavailable", "error", err)
+				os.Exit(1)
+			}
+			log.Warn("redis_unavailable", "error", err, "warning", "using development-only in-memory rate limiter")
+			redisClient = nil
+		} else {
+			abuseLimiter = ratelimit.NewRedis(redisClient)
+			defer abuseLimiter.Close()
+			log.Info("rate_limiting_selected", "provider", "redis")
+		}
+	}
+	if abuseLimiter == nil {
+		if cfg.Environment == "staging" || cfg.Environment == "production" {
+			log.Error("redis_required", "error", "REDIS_URL is required for distributed rate limiting")
+			os.Exit(1)
+		}
+		abuseLimiter = ratelimit.NewMemory()
+		log.Warn("rate_limiting_selected", "provider", "memory", "warning", "development_only")
+	}
 	if cfg.DatabaseURL != "" {
 		poolConfig, parseErr := pgxpool.ParseConfig(cfg.DatabaseURL)
 		if parseErr != nil {
@@ -157,6 +193,12 @@ func main() {
 	handler.SetDeviceRegistry(deviceRegistry)
 	production := cfg.Environment == "staging" || cfg.Environment == "production"
 	readinessChecks := []readiness.Check{
+		{Name: "rate_limiter", Required: production, Run: func(ctx context.Context) error {
+			if redisClient == nil {
+				return ratelimit.ErrUnavailable
+			}
+			return redisClient.Ping(ctx).Err()
+		}},
 		{Name: "authentication_jwks", Required: true, Run: authVerifier.Ready},
 		{Name: "attestation_provider_configuration", Required: production, Run: func(context.Context) error {
 			if cfg.AttestationProvider == "" {
@@ -196,6 +238,7 @@ func main() {
 		)
 	}
 	handler.SetReadinessChecker(readiness.New(readinessChecks...))
+	handler.SetRateLimiter(abuseLimiter, production)
 	server := &http.Server{Addr: cfg.HTTPAddr, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

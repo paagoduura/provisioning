@@ -15,6 +15,7 @@ A security-first backend foundation for wearable secure-element provisioning. Th
 - Google Play Integrity decode adapter with OAuth service-account authentication, package/request-hash binding, app-recognition, licensing, certificate-digest, and device-integrity policy checks
 - Mock Crypto/HSM and Interswitch adapters; **no real payment or key operations**
 - Health and readiness endpoints
+- Redis-backed distributed rate limiting and attestation abuse controls
 - PostgreSQL schema for the production persistence boundary
 - Docker Compose for PostgreSQL and Redis dependencies
 
@@ -26,11 +27,13 @@ go run ./cmd/api
 
 The API listens on `:8080` by default.
 
-Set `DATABASE_URL` to the Supabase connection string to use durable PostgreSQL sessions and audit events. If it is omitted, the service uses the development-only in-memory repository.
+Set `DATABASE_URL` to the Supabase connection string to use durable PostgreSQL sessions and audit events. If it is omitted, the service uses the development-only in-memory repository. Set `REDIS_URL` to the Redis connection string for distributed rate limiting; staging and production require both durable PostgreSQL and Redis.
 
 When `ENVIRONMENT=staging` or `ENVIRONMENT=production`, `DATABASE_URL` is mandatory and startup fails closed rather than using memory persistence. Apply `migrations/001_init.sql` through `migrations/012_readiness_migration_ledger.sql` to the target Supabase project before starting the service. Migration 006 initializes a global provider/key counter from the greatest value already stored in `device_attestations`. Migration 007 enables RLS and revokes direct grants for `anon` and `authenticated` on the application tables. Migration 008 persists the public key extracted from a validated Apple App Attest object for subsequent assertion verification. Migration 009 stores the device registry and opaque session-to-device binding; raw device identifiers are hashed in PostgreSQL. Migration 010 stores the server-built canonical request document alongside each challenge. Migration 011 adds the monotonic session version used for optimistic state-transition locking. Migration 012 creates the schema migration ledger and records the validated deployment version.
 
 Provisioning state changes use compare-and-swap semantics. Each session has a positive `version`; a transition updates the row only when the version read by the request is still current, then increments it atomically. Concurrent stale writers receive a conflict instead of overwriting a newer state. The in-memory adapter applies the same contract for development and tests, so behavior does not change between environments.
+
+The API applies an atomic Redis Lua token bucket to the transport peer IP before authentication. Session creation adds a per-user policy. Challenge generation and attestation verification add both per-user and per-device policies. Failed cryptographic or request-binding attestation attempts place short-lived Redis penalty keys on the user and device, while expired, replayed, unavailable-provider, and persistence-related errors are not treated as attacker-controlled signature failures. Rate-limit keys contain SHA-256 identifiers rather than raw user, device, or IP values. Redis is required and must pass a live ping before staging or production startup; local development can use the bounded in-memory implementation when `REDIS_URL` is absent.
 
 `/healthz` is a process-liveness check. `/readyz` is a bounded dependency check and returns `503` until required checks pass. In staging and production it verifies the PostgreSQL connection, migration ledger version 12, cached or freshly fetched Supabase JWKS keys, active attestation-provider configuration, and provider readiness. AWS KMS readiness performs a non-mutating `DescribeKey` check and requires an enabled key. Google Play readiness validates the configured service-account credentials and package configuration without sending a fabricated integrity token. Apple App Attest readiness validates the configured trust anchor, identifiers, environment, and durable key lookup. The JSON response reports only check names and statuses and does not expose credentials or provider endpoint details.
 

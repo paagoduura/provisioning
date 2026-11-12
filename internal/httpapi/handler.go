@@ -14,6 +14,7 @@ import (
 
 	"github.com/paagoduura/provisioning/internal/attestation"
 	"github.com/paagoduura/provisioning/internal/domain"
+	"github.com/paagoduura/provisioning/internal/ratelimit"
 	"github.com/paagoduura/provisioning/internal/readiness"
 	"github.com/paagoduura/provisioning/internal/registry"
 	"github.com/paagoduura/provisioning/internal/service"
@@ -28,6 +29,8 @@ type Handler struct {
 	verifier     TokenVerifier
 	devices      registry.Repository
 	readiness    *readiness.Checker
+	rateLimiter  ratelimit.Limiter
+	rateRequired bool
 }
 
 type TokenVerifier interface {
@@ -41,6 +44,9 @@ func New(log *slog.Logger, provisioning *service.Service, attestationService *at
 func (h *Handler) SetDeviceRegistry(devices registry.Repository) { h.devices = devices }
 
 func (h *Handler) SetReadinessChecker(checker *readiness.Checker) { h.readiness = checker }
+func (h *Handler) SetRateLimiter(limiter ratelimit.Limiter, required bool) {
+	h.rateLimiter, h.rateRequired = limiter, required
+}
 
 func (h *Handler) Routes() http.Handler {
 	publicMux := http.NewServeMux()
@@ -53,7 +59,7 @@ func (h *Handler) Routes() http.Handler {
 	apiMux.HandleFunc("POST /v1/devices/", h.deviceAction)
 	apiMux.HandleFunc("GET /v1/provisioning-sessions/", h.getSession)
 	apiMux.HandleFunc("POST /v1/provisioning-sessions/", h.sessionAction)
-	publicMux.Handle("/v1/", authenticate(h.verifier, apiMux))
+	publicMux.Handle("/v1/", h.rateLimitIP(authenticate(h.verifier, apiMux)))
 	return requestID(securityHeaders(maxBody(h.maxBodyBytes, logging(h.log, publicMux))))
 }
 
@@ -87,13 +93,16 @@ type createRequest struct {
 }
 
 func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
+	userID := authenticatedSubject(r.Context())
+	if !h.allow(w, r, ratelimit.HashedKey("user", "session-create", userID), ratelimit.SessionUserPolicy) {
+		return
+	}
 	defer r.Body.Close()
 	var req createRequest
 	if err := decodeRequest(r.Body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
-	userID := authenticatedSubject(r.Context())
 	result, existing, err := h.provisioning.Create(r.Context(), service.CreateInput{UserID: userID, DeviceUID: req.DeviceUID, DeviceModel: req.DeviceModel, Transport: req.Transport}, r.Header.Get("Idempotency-Key"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -256,6 +265,12 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 	if !h.requireSessionOwner(w, r, sessionID) {
 		return
 	}
+	session, err := h.provisioning.Get(r.Context(), sessionID)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	userID := authenticatedSubject(r.Context())
 	switch action {
 	case "device-discovery":
 		result, err := h.provisioning.Discover(r.Context(), sessionID)
@@ -265,6 +280,9 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, result)
 	case "attestation-challenges":
+		if !h.allowSessionAction(w, r, "challenge", userID, session.DeviceID, ratelimit.ChallengeUserPolicy, ratelimit.ChallengeDevicePolicy) {
+			return
+		}
 		if h.attestation == nil {
 			writeError(w, http.StatusServiceUnavailable, "attestation service unavailable")
 			return
@@ -282,6 +300,9 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusCreated, challengeResponse{ID: result.ID, Challenge: result.Value, Request: json.RawMessage(result.RequestDocument), RequestDigest: result.RequestHash, ExpiresAt: result.ExpiresAt})
 	case "attestation":
+		if !h.allowSessionAction(w, r, "attestation", userID, session.DeviceID, ratelimit.AttestationUserPolicy, ratelimit.AttestationDevicePolicy) {
+			return
+		}
 		if h.attestation == nil {
 			writeError(w, http.StatusServiceUnavailable, "attestation service unavailable")
 			return
@@ -293,6 +314,12 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 		}
 		result, err := h.attestation.Verify(r.Context(), sessionID, req)
 		if err != nil {
+			if isFailedAttestation(err) {
+				_ = h.rateLimiter.Penalize(r.Context(), ratelimit.HashedKey("user", "attestation", userID), 30*time.Second)
+				if session.DeviceID != "" {
+					_ = h.rateLimiter.Penalize(r.Context(), ratelimit.HashedKey("device", "attestation", session.DeviceID), 30*time.Second)
+				}
+			}
 			writeAttestationError(w, err)
 			return
 		}

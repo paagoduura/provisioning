@@ -12,6 +12,7 @@ type Config struct {
 	Environment               string
 	LogLevel                  string
 	DatabaseURL               string
+	RedisURL                  string
 	SupabaseAuthIssuer        string
 	SupabaseAuthAudience      string
 	AttestationProvider       string
@@ -43,7 +44,7 @@ func Load() (Config, error) {
 	if provider == "" && os.Getenv("AWS_KMS_KEY_ID") != "" {
 		provider = "aws-kms"
 	}
-	cfg := Config{HTTPAddr: getenv("HTTP_ADDR", ":8080"), Environment: getenv("ENVIRONMENT", "development"), LogLevel: getenv("LOG_LEVEL", "info"), DatabaseURL: os.Getenv("DATABASE_URL"), SupabaseAuthIssuer: getenv("SUPABASE_AUTH_ISSUER", "https://haytetewtgbfxnolrhjz.supabase.co/auth/v1"), SupabaseAuthAudience: getenv("SUPABASE_AUTH_AUDIENCE", "authenticated"), AttestationProvider: provider, GooglePlayPackageName: os.Getenv("GOOGLE_PLAY_INTEGRITY_PACKAGE_NAME"), GooglePlayCredentials: os.Getenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_JSON"), GooglePlayCredentialsFile: os.Getenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_FILE"), GooglePlayRequireLicensed: getenv("GOOGLE_PLAY_INTEGRITY_REQUIRE_LICENSED", "true") == "true", AWSRegion: getenv("AWS_REGION", "eu-north-1"), AWSKMSKeyID: os.Getenv("AWS_KMS_KEY_ID"), AWSKMSSigningAlgorithm: getenv("AWS_KMS_SIGNING_ALGORITHM", "RSASSA_PKCS1_V1_5_SHA_256"), AppleTeamID: os.Getenv("APPLE_TEAM_ID"), AppleBundleID: os.Getenv("APPLE_BUNDLE_ID"), AppleEnvironment: getenv("APPLE_APP_ATTEST_ENVIRONMENT", "production"), AppleRootCertificateFile: os.Getenv("APPLE_APP_ATTEST_ROOT_CERT_FILE"), MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second}
+	cfg := Config{HTTPAddr: getenv("HTTP_ADDR", ":8080"), Environment: getenv("ENVIRONMENT", "development"), LogLevel: getenv("LOG_LEVEL", "info"), DatabaseURL: os.Getenv("DATABASE_URL"), RedisURL: os.Getenv("REDIS_URL"), SupabaseAuthIssuer: getenv("SUPABASE_AUTH_ISSUER", "https://haytetewtgbfxnolrhjz.supabase.co/auth/v1"), SupabaseAuthAudience: getenv("SUPABASE_AUTH_AUDIENCE", "authenticated"), AttestationProvider: provider, GooglePlayPackageName: os.Getenv("GOOGLE_PLAY_INTEGRITY_PACKAGE_NAME"), GooglePlayCredentials: os.Getenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_JSON"), GooglePlayCredentialsFile: os.Getenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_FILE"), GooglePlayRequireLicensed: getenv("GOOGLE_PLAY_INTEGRITY_REQUIRE_LICENSED", "true") == "true", AWSRegion: getenv("AWS_REGION", "eu-north-1"), AWSKMSKeyID: os.Getenv("AWS_KMS_KEY_ID"), AWSKMSSigningAlgorithm: getenv("AWS_KMS_SIGNING_ALGORITHM", "RSASSA_PKCS1_V1_5_SHA_256"), AppleTeamID: os.Getenv("APPLE_TEAM_ID"), AppleBundleID: os.Getenv("APPLE_BUNDLE_ID"), AppleEnvironment: getenv("APPLE_APP_ATTEST_ENVIRONMENT", "production"), AppleRootCertificateFile: os.Getenv("APPLE_APP_ATTEST_ROOT_CERT_FILE"), MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second}
 	if cfg.HTTPAddr == "" {
 		return Config{}, errors.New("HTTP_ADDR must not be empty")
 	}
@@ -52,6 +53,9 @@ func Load() (Config, error) {
 	}
 	if (cfg.Environment == "staging" || cfg.Environment == "production") && cfg.DatabaseURL == "" {
 		return Config{}, errors.New("DATABASE_URL is required for staging and production")
+	}
+	if (cfg.Environment == "staging" || cfg.Environment == "production") && cfg.RedisURL == "" {
+		return Config{}, errors.New("REDIS_URL is required for staging and production rate limiting")
 	}
 	if cfg.MaxRequestBodyBytes < 1024 {
 		return Config{}, errors.New("MAX_REQUEST_BODY_BYTES must be at least 1024")

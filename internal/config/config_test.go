@@ -30,6 +30,17 @@ func TestLoadRejectsEphemeralPersistenceOutsideDevelopment(t *testing.T) {
 	}
 }
 
+func TestLoadRequiresRedisOutsideDevelopment(t *testing.T) {
+	t.Setenv("ENVIRONMENT", "staging")
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("REDIS_URL", "")
+	t.Setenv("ATTESTATION_PROVIDER", "aws-kms")
+	t.Setenv("AWS_KMS_KEY_ID", "key-1")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected staging to require REDIS_URL")
+	}
+}
+
 func TestLoadInfersKMSProviderFromKey(t *testing.T) {
 	t.Setenv("ATTESTATION_PROVIDER", "")
 	t.Setenv("AWS_KMS_KEY_ID", "key-1")
