@@ -54,6 +54,9 @@ type ProvisioningSession struct {
 	CreatedAt      time.Time         `json:"created_at"`
 	ExpiresAt      time.Time         `json:"expires_at"`
 	FailureCode    string            `json:"failure_code,omitempty"`
+	TokenReference string            `json:"-"`
+	WrappedPayload string            `json:"-"`
+	APDUReceipt    string            `json:"-"`
 }
 
 func (s *ProvisioningSession) Transition(next ProvisioningState) error {

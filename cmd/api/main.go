@@ -23,6 +23,7 @@ import (
 	"github.com/paagoduura/provisioning/internal/audit"
 	"github.com/paagoduura/provisioning/internal/config"
 	httpapi "github.com/paagoduura/provisioning/internal/httpapi"
+	"github.com/paagoduura/provisioning/internal/interswitch"
 	"github.com/paagoduura/provisioning/internal/observability"
 	"github.com/paagoduura/provisioning/internal/ratelimit"
 	"github.com/paagoduura/provisioning/internal/readiness"
@@ -146,7 +147,16 @@ func main() {
 		auditSinks = append(auditSinks, observability.NewWebhookAlertSink(&http.Client{Timeout: 5 * time.Second}, cfg.SecurityAlertWebhookURL, cfg.SecurityAlertWebhookSecret, log))
 	}
 	auditSink = &observability.AuditMetricsSink{Next: observability.NewMultiSink(auditSinks...), Metrics: metrics}
-	provisioning := service.New(repo, mock.CryptoService{}, mock.InterswitchAdapter{}, auditSink)
+	var tokenPort service.TokenPort = mock.InterswitchAdapter{}
+	var tokenWebhook service.TokenWebhookVerifier
+	if cfg.InterswitchTokenURL != "" || cfg.InterswitchRequestURL != "" || cfg.InterswitchClientID != "" || cfg.InterswitchClientSecret != "" || cfg.InterswitchWebhookSecret != "" {
+		client := &interswitch.Client{HTTP: &http.Client{Timeout: 15 * time.Second}, TokenURL: cfg.InterswitchTokenURL, RequestURL: cfg.InterswitchRequestURL, ClientID: cfg.InterswitchClientID, ClientSecret: cfg.InterswitchClientSecret, WebhookSecret: []byte(cfg.InterswitchWebhookSecret), MaxClockSkew: 5 * time.Minute}
+		tokenPort, tokenWebhook = client, client
+		log.Info("token_provider_selected", "provider", "interswitch")
+	} else {
+		log.Warn("token_provider_selected", "provider", "development_mock")
+	}
+	provisioning := service.New(repo, mock.CryptoService{}, tokenPort, auditSink)
 	provisioning.SetDeviceRegistry(deviceRegistry)
 	var verifier attestation.Verifier = attestation.UnavailableVerifier{}
 	switch cfg.AttestationProvider {
@@ -209,6 +219,7 @@ func main() {
 	attestationService.SetDeviceRegistry(deviceRegistry)
 	handler := httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes, authVerifier)
 	handler.SetDeviceRegistry(deviceRegistry)
+	handler.SetTokenWebhookVerifier(tokenWebhook)
 	handler.SetObservability(metrics, tracerProvider.Tracer("provisioning/http"))
 	production := cfg.Environment == "staging" || cfg.Environment == "production"
 	timed := func(dependency, operation string, run readiness.CheckFunc) readiness.CheckFunc {
@@ -245,11 +256,11 @@ func main() {
 			readiness.Check{Name: "database", Required: true, Run: pool.Ping},
 			readiness.Check{Name: "database_migration", Required: true, Run: func(ctx context.Context) error {
 				var applied bool
-				if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 12)`).Scan(&applied); err != nil {
+				if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 13)`).Scan(&applied); err != nil {
 					return err
 				}
 				if !applied {
-					return errors.New("required migration 012 is not applied")
+					return errors.New("required migration 013 is not applied")
 				}
 				return nil
 			}},

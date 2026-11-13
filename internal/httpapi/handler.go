@@ -35,6 +35,7 @@ type Handler struct {
 	rateRequired bool
 	metrics      *observability.Metrics
 	tracer       trace.Tracer
+	tokenWebhook service.TokenWebhookVerifier
 }
 
 type TokenVerifier interface {
@@ -54,6 +55,9 @@ func (h *Handler) SetRateLimiter(limiter ratelimit.Limiter, required bool) {
 func (h *Handler) SetObservability(metrics *observability.Metrics, tracer trace.Tracer) {
 	h.metrics, h.tracer = metrics, tracer
 }
+func (h *Handler) SetTokenWebhookVerifier(verifier service.TokenWebhookVerifier) {
+	h.tokenWebhook = verifier
+}
 
 func (h *Handler) Routes() http.Handler {
 	publicMux := http.NewServeMux()
@@ -66,6 +70,7 @@ func (h *Handler) Routes() http.Handler {
 		}
 		h.metrics.Handler().ServeHTTP(w, r)
 	})
+	publicMux.HandleFunc("POST /v1/webhooks/interswitch", h.interswitchWebhook)
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("POST /v1/provisioning-sessions", h.createSession)
 	apiMux.HandleFunc("GET /v1/devices", h.listDevices)
@@ -345,6 +350,52 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusNotFound, "unknown session action")
 	}
+}
+
+type stageProofRequest struct {
+	Proof string `json:"proof"`
+}
+type failureRequest struct {
+	Code string `json:"code"`
+}
+
+func (h *Handler) interswitchWebhook(w http.ResponseWriter, r *http.Request) {
+	if h.tokenWebhook == nil {
+		writeError(w, http.StatusServiceUnavailable, "token webhook verifier unavailable")
+		return
+	}
+	defer r.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(r.Body, h.maxBodyBytes+1))
+	if err != nil || int64(len(body)) > h.maxBodyBytes {
+		writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		return
+	}
+	headers := map[string]string{"X-Interswitch-Timestamp": r.Header.Get("X-Interswitch-Timestamp"), "X-Interswitch-Signature": r.Header.Get("X-Interswitch-Signature"), "X-Interswitch-Event-Id": r.Header.Get("X-Interswitch-Event-Id")}
+	event, err := h.tokenWebhook.VerifyTokenWebhook(r.Context(), body, headers)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, "invalid webhook")
+		return
+	}
+	result, err := h.provisioning.ReceiveToken(r.Context(), event)
+	if err != nil {
+		writeProvisioningStageError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func writeProvisioningStageError(w http.ResponseWriter, err error) {
+	status := http.StatusBadRequest
+	if errors.Is(err, service.ErrStageUnavailable) {
+		status = http.StatusNotImplemented
+	}
+	if errors.Is(err, domain.ErrConcurrentUpdate) {
+		status = http.StatusConflict
+	}
+	if errors.Is(err, domain.ErrSessionNotFound) {
+		status = http.StatusNotFound
+	}
+	writeJSON(w, status, map[string]string{"error": "provisioning stage failed", "detail": err.Error()})
 }
 
 func writeDomainError(w http.ResponseWriter, err error) {

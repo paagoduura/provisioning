@@ -25,7 +25,7 @@ func (r *SessionRepository) Create(ctx context.Context, s domain.ProvisioningSes
 	if version == 0 {
 		version = 1
 	}
-	err := r.pool.QueryRow(ctx, `INSERT INTO provisioning_sessions (id, idempotency_key, user_id, device_id, device_uid_hash, device_model, transport, state, version, correlation_id, created_at, expires_at, failure_code) VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, '')) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`, s.ID, s.IdempotencyKey, s.UserID, s.DeviceID, hashDeviceUID(s.DeviceUID), s.DeviceModel, s.Transport, s.State, version, s.Correlation, s.CreatedAt, s.ExpiresAt, s.FailureCode).Scan(&insertedID)
+	err := r.pool.QueryRow(ctx, `INSERT INTO provisioning_sessions (id, idempotency_key, user_id, device_id, device_uid_hash, device_model, transport, state, version, correlation_id, created_at, expires_at, failure_code, token_reference, wrapped_payload, apdu_receipt) VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, ''), NULLIF($14, ''), NULLIF($15, ''), NULLIF($16, '')) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`, s.ID, s.IdempotencyKey, s.UserID, s.DeviceID, hashDeviceUID(s.DeviceUID), s.DeviceModel, s.Transport, s.State, version, s.Correlation, s.CreatedAt, s.ExpiresAt, s.FailureCode, s.TokenReference, s.WrappedPayload, s.APDUReceipt).Scan(&insertedID)
 	if err == nil {
 		s.Version = version
 		return s, true, nil
@@ -43,7 +43,7 @@ func (r *SessionRepository) Create(ctx context.Context, s domain.ProvisioningSes
 func (r *SessionRepository) Get(ctx context.Context, id string) (domain.ProvisioningSession, error) {
 	var s domain.ProvisioningSession
 	var deviceHash []byte
-	err := r.pool.QueryRow(ctx, `SELECT id, idempotency_key, user_id, COALESCE(device_id, ''), device_uid_hash, device_model, transport, state, version, correlation_id, created_at, expires_at, COALESCE(failure_code, '') FROM provisioning_sessions WHERE id = $1`, id).Scan(&s.ID, &s.IdempotencyKey, &s.UserID, &s.DeviceID, &deviceHash, &s.DeviceModel, &s.Transport, &s.State, &s.Version, &s.Correlation, &s.CreatedAt, &s.ExpiresAt, &s.FailureCode)
+	err := r.pool.QueryRow(ctx, `SELECT id, idempotency_key, user_id, COALESCE(device_id, ''), device_uid_hash, device_model, transport, state, version, correlation_id, created_at, expires_at, COALESCE(failure_code, ''), COALESCE(token_reference, ''), COALESCE(wrapped_payload, ''), COALESCE(apdu_receipt, '') FROM provisioning_sessions WHERE id = $1`, id).Scan(&s.ID, &s.IdempotencyKey, &s.UserID, &s.DeviceID, &deviceHash, &s.DeviceModel, &s.Transport, &s.State, &s.Version, &s.Correlation, &s.CreatedAt, &s.ExpiresAt, &s.FailureCode, &s.TokenReference, &s.WrappedPayload, &s.APDUReceipt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ProvisioningSession{}, ErrNotFound
 	}
@@ -58,7 +58,7 @@ func (r *SessionRepository) Save(ctx context.Context, s domain.ProvisioningSessi
 		return domain.ProvisioningSession{}, domain.ErrConcurrentUpdate
 	}
 	var nextVersion int64
-	err := r.pool.QueryRow(ctx, `UPDATE provisioning_sessions SET device_id = NULLIF($2, ''), state = $3, version = version + 1, failure_code = NULLIF($4, '') WHERE id = $1 AND version = $5 RETURNING version`, s.ID, s.DeviceID, s.State, s.FailureCode, s.Version).Scan(&nextVersion)
+	err := r.pool.QueryRow(ctx, `UPDATE provisioning_sessions SET device_id = NULLIF($2, ''), state = $3, version = version + 1, failure_code = NULLIF($4, ''), token_reference = NULLIF($6, ''), wrapped_payload = NULLIF($7, ''), apdu_receipt = NULLIF($8, '') WHERE id = $1 AND version = $5 RETURNING version`, s.ID, s.DeviceID, s.State, s.FailureCode, s.Version, s.TokenReference, s.WrappedPayload, s.APDUReceipt).Scan(&nextVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var exists bool
 		if checkErr := r.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM provisioning_sessions WHERE id = $1)`, s.ID).Scan(&exists); checkErr != nil {

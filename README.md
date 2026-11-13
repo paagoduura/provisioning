@@ -13,10 +13,11 @@ A security-first backend foundation for wearable secure-element provisioning. Th
 - Owned device registry with hashed device identifiers, opaque device IDs, provider/key registration, key rotation, revocation, replacement, suspension, resumption, and retirement
 - AWS KMS asymmetric verification adapter; KMS keeps the verification key under AWS HSM protection and is enabled only with an exact configured key ID
 - Google Play Integrity decode adapter with OAuth service-account authentication, package/request-hash binding, app-recognition, licensing, certificate-digest, and device-integrity policy checks
-- Mock Crypto/HSM and Interswitch adapters; **no real payment or key operations**
+- Development-only mock Crypto/HSM and token adapters; production token requests use the configured Interswitch OAuth adapter, while device crypto and APDU hardware remain explicit fail-closed ports
 - Health and readiness endpoints
 - Redis-backed distributed rate limiting and attestation abuse controls
 - PostgreSQL schema for the production persistence boundary
+- Remaining-stage orchestration behind explicit authentication, Interswitch, payload-wrapper, APDU-channel, and device-verification interfaces
 - Docker Compose for PostgreSQL and Redis dependencies
 - Prometheus-compatible metrics at `/metrics`, OpenTelemetry OTLP HTTP tracing, and structured security-event export
 
@@ -45,6 +46,16 @@ The API applies an atomic Redis Lua token bucket to the transport peer IP before
 When `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is configured, the service exports server spans over OTLP/HTTP with `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES_ENVIRONMENT` resource attributes. Shutdown flushes the batch span processor. Leave the endpoint empty when trace export is intentionally disabled.
 
 Audit events continue to be written to durable PostgreSQL in production and are also emitted as allowlisted structured JSON log records. The export excludes assertions, access tokens, raw device UIDs, and request bodies. `SECURITY_ALERT_WEBHOOK_URL` can be set to deliver failure events to an HTTPS alert receiver; payloads contain only opaque IDs and stable event codes, and are signed with `SECURITY_ALERT_WEBHOOK_SECRET` using `X-Alert-Signature: sha256=<hex>`.
+
+## Remaining provisioning stages
+
+After device attestation, the service exposes owner-scoped actions for session authentication, token request, token receipt, payload wrapping, APDU transfer, device verification, completion, and explicit failure. Every action validates the exact predecessor state, persists through the existing optimistic compare-and-swap repository, and records a redacted audit event. Provider failures move the session to `FAILED`; they do not silently advance it.
+
+The Interswitch adapter uses OAuth 2.0 client credentials with TLS, strict JSON response validation, bounded HTTP clients, and no fabricated token values. Configure the exact product-specific sandbox URLs and credentials supplied by Interswitch with `INTERSWITCH_TOKEN_URL`, `INTERSWITCH_REQUEST_URL`, `INTERSWITCH_CLIENT_ID`, and `INTERSWITCH_CLIENT_SECRET`. Token webhooks require a configured secret, event ID, timestamp within a bounded replay window, and a constant-time HMAC comparison before the state transition is attempted. The exact Interswitch webhook signature profile must match the API product contract; the adapter does not guess undocumented fields.
+
+Payload wrapping is an injected cryptographic boundary. The provided AES-GCM wrapper binds ciphertext to the session and correlation ID and uses a fresh random nonce; production deployments should source its key from the approved HSM/KMS ceremony rather than application source or logs. APDU transfer is similarly injected through a secure-channel transport. A production hardware adapter must implement the GlobalPlatform SCP03 mutual-authentication, command-integrity, response-integrity, and confidentiality contract; without that adapter the stage fails closed instead of simulating a card.
+
+Migration 013 adds server-side token reference, wrapped payload, and APDU receipt fields. These fields are never serialized in the public session response.
 
 The API verifies Supabase Auth access tokens against `SUPABASE_AUTH_ISSUER` and `SUPABASE_AUTH_AUDIENCE` (defaults for this project are shown in `.env.example`). It loads the project's public JWKS at startup, refreshes keys on rotation and every five minutes, and accepts only ES256 or RS256 tokens with the expected issuer, audience, expiration, a non-empty subject, and the `authenticated` role. This follows Supabase's [JWT verification guidance](https://supabase.com/docs/guides/auth/jwts) and [signing-key guidance](https://supabase.com/docs/guides/auth/signing-keys). All `/v1` routes require `Authorization: Bearer <access-token>`; health and readiness routes remain public. The `user_id` request field is no longer accepted: the verified `sub` claim becomes the session owner. A valid Supabase user login is required to obtain an access token for API use.
 
