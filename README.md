@@ -18,6 +18,7 @@ A security-first backend foundation for wearable secure-element provisioning. Th
 - Redis-backed distributed rate limiting and attestation abuse controls
 - PostgreSQL schema for the production persistence boundary
 - Docker Compose for PostgreSQL and Redis dependencies
+- Prometheus-compatible metrics at `/metrics`, OpenTelemetry OTLP HTTP tracing, and structured security-event export
 
 ## Run locally
 
@@ -36,6 +37,14 @@ Provisioning state changes use compare-and-swap semantics. Each session has a po
 The API applies an atomic Redis Lua token bucket to the transport peer IP before authentication. Session creation adds a per-user policy. Challenge generation and attestation verification add both per-user and per-device policies. Failed cryptographic or request-binding attestation attempts place short-lived Redis penalty keys on the user and device, while expired, replayed, unavailable-provider, and persistence-related errors are not treated as attacker-controlled signature failures. Rate-limit keys contain SHA-256 identifiers rather than raw user, device, or IP values. Redis is required and must pass a live ping before staging or production startup; local development can use the bounded in-memory implementation when `REDIS_URL` is absent.
 
 `/healthz` is a process-liveness check. `/readyz` is a bounded dependency check and returns `503` until required checks pass. In staging and production it verifies the PostgreSQL connection, migration ledger version 12, cached or freshly fetched Supabase JWKS keys, active attestation-provider configuration, and provider readiness. AWS KMS readiness performs a non-mutating `DescribeKey` check and requires an enabled key. Google Play readiness validates the configured service-account credentials and package configuration without sending a fabricated integrity token. Apple App Attest readiness validates the configured trust anchor, identifiers, environment, and durable key lookup. The JSON response reports only check names and statuses and does not expose credentials or provider endpoint details.
+
+## Observability
+
+`GET /metrics` exposes an application-owned Prometheus registry. HTTP request metrics use normalized route labels rather than raw paths, and dependency metrics cover readiness operations for PostgreSQL, Redis, Supabase JWKS, and the configured attestation provider. Attestation failure metrics use stable provider and failure-code labels so dashboards can group cryptographic, replay, binding, and provider-availability failures without recording assertions or tokens.
+
+When `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is configured, the service exports server spans over OTLP/HTTP with `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES_ENVIRONMENT` resource attributes. Shutdown flushes the batch span processor. Leave the endpoint empty when trace export is intentionally disabled.
+
+Audit events continue to be written to durable PostgreSQL in production and are also emitted as allowlisted structured JSON log records. The export excludes assertions, access tokens, raw device UIDs, and request bodies. `SECURITY_ALERT_WEBHOOK_URL` can be set to deliver failure events to an HTTPS alert receiver; payloads contain only opaque IDs and stable event codes, and are signed with `SECURITY_ALERT_WEBHOOK_SECRET` using `X-Alert-Signature: sha256=<hex>`.
 
 The API verifies Supabase Auth access tokens against `SUPABASE_AUTH_ISSUER` and `SUPABASE_AUTH_AUDIENCE` (defaults for this project are shown in `.env.example`). It loads the project's public JWKS at startup, refreshes keys on rotation and every five minutes, and accepts only ES256 or RS256 tokens with the expected issuer, audience, expiration, a non-empty subject, and the `authenticated` role. This follows Supabase's [JWT verification guidance](https://supabase.com/docs/guides/auth/jwts) and [signing-key guidance](https://supabase.com/docs/guides/auth/signing-keys). All `/v1` routes require `Authorization: Bearer <access-token>`; health and readiness routes remain public. The `user_id` request field is no longer accepted: the verified `sub` claim becomes the session owner. A valid Supabase user login is required to obtain an access token for API use.
 

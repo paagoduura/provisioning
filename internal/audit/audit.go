@@ -11,6 +11,10 @@ type Event struct {
 	Type      string
 	Result    string
 	Reason    string
+	ActorID   string
+	DeviceID  string
+	Provider  string
+	RequestID string
 	At        time.Time
 }
 

@@ -106,7 +106,7 @@ func (s *Service) IssueChallenge(ctx context.Context, sessionID string) (challen
 func (s *Service) Verify(ctx context.Context, sessionID string, input Submission) (result VerifiedResult, err error) {
 	defer func() {
 		if err != nil && s.audit != nil {
-			_ = s.audit.Record(ctx, audit.Event{SessionID: sessionID, Type: "DEVICE_ATTESTATION_FAILED", Result: "FAILURE", Reason: FailureCode(err), At: s.now()})
+			_ = s.audit.Record(ctx, audit.Event{SessionID: sessionID, Type: "DEVICE_ATTESTATION_FAILED", Result: "FAILURE", Reason: FailureCode(err), Provider: input.Provider, At: s.now()})
 		}
 	}()
 	if input.Provider == "" || input.KeyID == "" || input.Assertion == "" {
@@ -181,7 +181,7 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 		return VerifiedResult{}, err
 	}
 	if s.audit != nil {
-		_ = s.audit.Record(ctx, audit.Event{SessionID: sessionID, Type: "DEVICE_ATTESTED", Result: "SUCCESS", At: s.now()})
+		_ = s.audit.Record(ctx, audit.Event{SessionID: sessionID, Type: "DEVICE_ATTESTED", Result: "SUCCESS", Provider: result.Provider, At: s.now()})
 	}
 	return result, nil
 }

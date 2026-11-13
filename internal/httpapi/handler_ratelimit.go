@@ -5,9 +5,11 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/paagoduura/provisioning/internal/attestation"
+	"github.com/paagoduura/provisioning/internal/observability"
 	"github.com/paagoduura/provisioning/internal/ratelimit"
 )
 
@@ -47,6 +49,9 @@ func (h *Handler) allow(w http.ResponseWriter, r *http.Request, key string, poli
 		return true
 	}
 	if !decision.Allowed {
+		if h.metrics != nil {
+			h.metrics.RecordRateLimitDenied(rateLimitScope(key), observability.Route(r.URL.Path))
+		}
 		writeRateLimited(w, decision)
 		return false
 	}
@@ -84,4 +89,14 @@ func isFailedAttestation(err error) bool {
 	default:
 		return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 	}
+}
+
+func rateLimitScope(key string) string {
+	if strings.HasPrefix(key, "user:") {
+		return "user"
+	}
+	if strings.HasPrefix(key, "device:") {
+		return "device"
+	}
+	return "endpoint"
 }

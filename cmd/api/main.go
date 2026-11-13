@@ -23,11 +23,13 @@ import (
 	"github.com/paagoduura/provisioning/internal/audit"
 	"github.com/paagoduura/provisioning/internal/config"
 	httpapi "github.com/paagoduura/provisioning/internal/httpapi"
+	"github.com/paagoduura/provisioning/internal/observability"
 	"github.com/paagoduura/provisioning/internal/ratelimit"
 	"github.com/paagoduura/provisioning/internal/readiness"
 	"github.com/paagoduura/provisioning/internal/registry"
 	"github.com/paagoduura/provisioning/internal/service"
 	"github.com/paagoduura/provisioning/internal/supabaseauth"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -37,6 +39,17 @@ func main() {
 	if err != nil {
 		log.Error("invalid_config", "error", err)
 		os.Exit(1)
+	}
+	metrics := observability.NewMetrics(prometheus.NewRegistry())
+	tracerProvider, shutdownTracing, traceErr := observability.SetupTracing(context.Background(), cfg.OTELServiceName, cfg.OTELEnvironment, cfg.OTELTracesEndpoint)
+	if traceErr != nil {
+		if cfg.Environment == "staging" || cfg.Environment == "production" {
+			log.Error("tracing_initialization_failed", "error", traceErr)
+			os.Exit(1)
+		}
+		log.Warn("tracing_initialization_failed", "error", traceErr)
+	} else {
+		defer func() { _ = shutdownTracing(context.Background()) }()
 	}
 	authCtx, authCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	authVerifier, err := supabaseauth.NewVerifier(authCtx, cfg.SupabaseAuthIssuer, cfg.SupabaseAuthAudience, nil)
@@ -128,6 +141,11 @@ func main() {
 		deviceRegistry = memory.NewDeviceRegistry()
 		log.Warn("persistence_selected", "provider", "memory", "warning", "development_only")
 	}
+	auditSinks := []audit.Sink{auditSink, observability.NewJSONSink(log)}
+	if cfg.SecurityAlertWebhookURL != "" {
+		auditSinks = append(auditSinks, observability.NewWebhookAlertSink(&http.Client{Timeout: 5 * time.Second}, cfg.SecurityAlertWebhookURL, cfg.SecurityAlertWebhookSecret, log))
+	}
+	auditSink = &observability.AuditMetricsSink{Next: observability.NewMultiSink(auditSinks...), Metrics: metrics}
 	provisioning := service.New(repo, mock.CryptoService{}, mock.InterswitchAdapter{}, auditSink)
 	provisioning.SetDeviceRegistry(deviceRegistry)
 	var verifier attestation.Verifier = attestation.UnavailableVerifier{}
@@ -191,16 +209,25 @@ func main() {
 	attestationService.SetDeviceRegistry(deviceRegistry)
 	handler := httpapi.New(log, provisioning, attestationService, cfg.MaxRequestBodyBytes, authVerifier)
 	handler.SetDeviceRegistry(deviceRegistry)
+	handler.SetObservability(metrics, tracerProvider.Tracer("provisioning/http"))
 	production := cfg.Environment == "staging" || cfg.Environment == "production"
+	timed := func(dependency, operation string, run readiness.CheckFunc) readiness.CheckFunc {
+		return func(ctx context.Context) error {
+			started := time.Now()
+			err := run(ctx)
+			metrics.RecordDependency(dependency, operation, started, err)
+			return err
+		}
+	}
 	readinessChecks := []readiness.Check{
-		{Name: "rate_limiter", Required: production, Run: func(ctx context.Context) error {
+		{Name: "rate_limiter", Required: production, Run: timed("redis", "ping", func(ctx context.Context) error {
 			if redisClient == nil {
 				return ratelimit.ErrUnavailable
 			}
 			return redisClient.Ping(ctx).Err()
-		}},
-		{Name: "authentication_jwks", Required: true, Run: authVerifier.Ready},
-		{Name: "attestation_provider_configuration", Required: production, Run: func(context.Context) error {
+		})},
+		{Name: "authentication_jwks", Required: true, Run: timed("supabase_auth", "jwks_ready", authVerifier.Ready)},
+		{Name: "attestation_provider_configuration", Required: production, Run: timed("attestation_provider", "configuration", func(context.Context) error {
 			if cfg.AttestationProvider == "" {
 				return attestation.ErrProviderReadiness
 			}
@@ -208,10 +235,10 @@ func main() {
 				return attestation.ErrProviderReadiness
 			}
 			return nil
-		}},
-		{Name: "attestation_provider_health", Required: production, Run: func(ctx context.Context) error {
+		})},
+		{Name: "attestation_provider_health", Required: production, Run: timed("attestation_provider", "health", func(ctx context.Context) error {
 			return attestation.ProviderReady(ctx, verifier)
-		}},
+		})},
 	}
 	if pool != nil {
 		readinessChecks = append(readinessChecks,

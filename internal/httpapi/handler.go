@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go.opentelemetry.io/otel/trace"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/paagoduura/provisioning/internal/attestation"
 	"github.com/paagoduura/provisioning/internal/domain"
+	"github.com/paagoduura/provisioning/internal/observability"
 	"github.com/paagoduura/provisioning/internal/ratelimit"
 	"github.com/paagoduura/provisioning/internal/readiness"
 	"github.com/paagoduura/provisioning/internal/registry"
@@ -31,6 +33,8 @@ type Handler struct {
 	readiness    *readiness.Checker
 	rateLimiter  ratelimit.Limiter
 	rateRequired bool
+	metrics      *observability.Metrics
+	tracer       trace.Tracer
 }
 
 type TokenVerifier interface {
@@ -47,11 +51,21 @@ func (h *Handler) SetReadinessChecker(checker *readiness.Checker) { h.readiness 
 func (h *Handler) SetRateLimiter(limiter ratelimit.Limiter, required bool) {
 	h.rateLimiter, h.rateRequired = limiter, required
 }
+func (h *Handler) SetObservability(metrics *observability.Metrics, tracer trace.Tracer) {
+	h.metrics, h.tracer = metrics, tracer
+}
 
 func (h *Handler) Routes() http.Handler {
 	publicMux := http.NewServeMux()
 	publicMux.HandleFunc("GET /healthz", h.health)
 	publicMux.HandleFunc("GET /readyz", h.ready)
+	publicMux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+		if h.metrics == nil {
+			writeError(w, http.StatusServiceUnavailable, "metrics unavailable")
+			return
+		}
+		h.metrics.Handler().ServeHTTP(w, r)
+	})
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("POST /v1/provisioning-sessions", h.createSession)
 	apiMux.HandleFunc("GET /v1/devices", h.listDevices)
@@ -60,7 +74,11 @@ func (h *Handler) Routes() http.Handler {
 	apiMux.HandleFunc("GET /v1/provisioning-sessions/", h.getSession)
 	apiMux.HandleFunc("POST /v1/provisioning-sessions/", h.sessionAction)
 	publicMux.Handle("/v1/", h.rateLimitIP(authenticate(h.verifier, apiMux)))
-	return requestID(securityHeaders(maxBody(h.maxBodyBytes, logging(h.log, publicMux))))
+	var observed http.Handler = publicMux
+	if h.tracer != nil || h.metrics != nil {
+		observed = observability.MiddlewareWithTracer(h.metrics, h.tracer, publicMux)
+	}
+	return requestID(securityHeaders(maxBody(h.maxBodyBytes, logging(h.log, observed))))
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
