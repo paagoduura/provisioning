@@ -5,6 +5,11 @@ import (
 	"time"
 )
 
+const (
+	BindingScopeDeviceKey = "device_key"
+	BindingScopeSession   = "session"
+)
+
 type Challenge struct {
 	ID              string
 	SessionID       string
@@ -25,9 +30,10 @@ type Submission struct {
 
 type VerifiedResult struct {
 	Provider      string `json:"provider"`
-	KeyID         string `json:"key_id"`
-	Counter       uint64 `json:"counter"`
+	KeyID         string `json:"key_id,omitempty"`
+	Counter       uint64 `json:"counter,omitempty"`
 	TrustLevel    string `json:"trust_level"`
+	BindingScope  string `json:"binding_scope"`
 	PublicKeyDER  []byte `json:"-"`
 	BundleVersion string `json:"-"`
 	Environment   string `json:"-"`

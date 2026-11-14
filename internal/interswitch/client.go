@@ -123,9 +123,9 @@ func (c *Client) VerifyTokenWebhook(ctx context.Context, body []byte, headers ma
 	}
 	timestamp := headers["X-Interswitch-Timestamp"]
 	signature := headers["X-Interswitch-Signature"]
-	eventID := headers["X-Interswitch-Event-Id"]
+	eventID := strings.TrimSpace(headers["X-Interswitch-Event-Id"])
 	seconds, err := strconv.ParseInt(timestamp, 10, 64)
-	if err != nil || eventID == "" || signature == "" {
+	if err != nil || eventID == "" || len(eventID) > 256 || strings.ContainsAny(eventID, "\x00\r\n") || signature == "" {
 		return service.TokenWebhook{}, errors.New("interswitch webhook signature headers are incomplete")
 	}
 	maxSkew := c.MaxClockSkew

@@ -13,6 +13,7 @@ type Config struct {
 	Environment                string
 	LogLevel                   string
 	DatabaseURL                string
+	AutoMigrate                bool
 	RedisURL                   string
 	InterswitchTokenURL        string
 	InterswitchRequestURL      string
@@ -51,16 +52,28 @@ func Load() (Config, error) {
 	if err != nil || shutdownSeconds < 1 {
 		return Config{}, errors.New("SHUTDOWN_TIMEOUT_SECONDS must be a positive integer")
 	}
+	autoMigrate, err := strconv.ParseBool(getenv("AUTO_MIGRATE", "false"))
+	if err != nil {
+		return Config{}, errors.New("AUTO_MIGRATE must be true or false")
+	}
 	provider := getenv("ATTESTATION_PROVIDER", "")
 	if provider == "" && os.Getenv("AWS_KMS_KEY_ID") != "" {
 		provider = "aws-kms"
 	}
-	cfg := Config{HTTPAddr: getenv("HTTP_ADDR", ":8080"), Environment: getenv("ENVIRONMENT", "development"), LogLevel: getenv("LOG_LEVEL", "info"), DatabaseURL: os.Getenv("DATABASE_URL"), RedisURL: os.Getenv("REDIS_URL"), InterswitchTokenURL: os.Getenv("INTERSWITCH_TOKEN_URL"), InterswitchRequestURL: os.Getenv("INTERSWITCH_REQUEST_URL"), InterswitchClientID: os.Getenv("INTERSWITCH_CLIENT_ID"), InterswitchClientSecret: os.Getenv("INTERSWITCH_CLIENT_SECRET"), InterswitchWebhookSecret: os.Getenv("INTERSWITCH_WEBHOOK_SECRET"), OTELServiceName: getenv("OTEL_SERVICE_NAME", "provisioning-api"), OTELEnvironment: getenv("OTEL_RESOURCE_ATTRIBUTES_ENVIRONMENT", getenv("ENVIRONMENT", "development")), OTELTracesEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"), SecurityAlertWebhookURL: os.Getenv("SECURITY_ALERT_WEBHOOK_URL"), SecurityAlertWebhookSecret: os.Getenv("SECURITY_ALERT_WEBHOOK_SECRET"), SupabaseAuthIssuer: getenv("SUPABASE_AUTH_ISSUER", "https://haytetewtgbfxnolrhjz.supabase.co/auth/v1"), SupabaseAuthAudience: getenv("SUPABASE_AUTH_AUDIENCE", "authenticated"), AttestationProvider: provider, GooglePlayPackageName: os.Getenv("GOOGLE_PLAY_INTEGRITY_PACKAGE_NAME"), GooglePlayCredentials: os.Getenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_JSON"), GooglePlayCredentialsFile: os.Getenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_FILE"), GooglePlayRequireLicensed: getenv("GOOGLE_PLAY_INTEGRITY_REQUIRE_LICENSED", "true") == "true", AWSRegion: getenv("AWS_REGION", "eu-north-1"), AWSKMSKeyID: os.Getenv("AWS_KMS_KEY_ID"), AWSKMSSigningAlgorithm: getenv("AWS_KMS_SIGNING_ALGORITHM", "RSASSA_PKCS1_V1_5_SHA_256"), AppleTeamID: os.Getenv("APPLE_TEAM_ID"), AppleBundleID: os.Getenv("APPLE_BUNDLE_ID"), AppleEnvironment: getenv("APPLE_APP_ATTEST_ENVIRONMENT", "production"), AppleRootCertificateFile: os.Getenv("APPLE_APP_ATTEST_ROOT_CERT_FILE"), MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second}
+	cfg := Config{HTTPAddr: getenv("HTTP_ADDR", ":8080"), Environment: getenv("ENVIRONMENT", "development"), LogLevel: getenv("LOG_LEVEL", "info"), DatabaseURL: os.Getenv("DATABASE_URL"), AutoMigrate: autoMigrate, RedisURL: os.Getenv("REDIS_URL"), InterswitchTokenURL: os.Getenv("INTERSWITCH_TOKEN_URL"), InterswitchRequestURL: os.Getenv("INTERSWITCH_REQUEST_URL"), InterswitchClientID: os.Getenv("INTERSWITCH_CLIENT_ID"), InterswitchClientSecret: os.Getenv("INTERSWITCH_CLIENT_SECRET"), InterswitchWebhookSecret: os.Getenv("INTERSWITCH_WEBHOOK_SECRET"), OTELServiceName: getenv("OTEL_SERVICE_NAME", "provisioning-api"), OTELEnvironment: getenv("OTEL_RESOURCE_ATTRIBUTES_ENVIRONMENT", getenv("ENVIRONMENT", "development")), OTELTracesEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"), SecurityAlertWebhookURL: os.Getenv("SECURITY_ALERT_WEBHOOK_URL"), SecurityAlertWebhookSecret: os.Getenv("SECURITY_ALERT_WEBHOOK_SECRET"), SupabaseAuthIssuer: getenv("SUPABASE_AUTH_ISSUER", "https://haytetewtgbfxnolrhjz.supabase.co/auth/v1"), SupabaseAuthAudience: getenv("SUPABASE_AUTH_AUDIENCE", "authenticated"), AttestationProvider: provider, GooglePlayPackageName: os.Getenv("GOOGLE_PLAY_INTEGRITY_PACKAGE_NAME"), GooglePlayCredentials: os.Getenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_JSON"), GooglePlayCredentialsFile: os.Getenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_FILE"), GooglePlayRequireLicensed: getenv("GOOGLE_PLAY_INTEGRITY_REQUIRE_LICENSED", "true") == "true", AWSRegion: getenv("AWS_REGION", "eu-north-1"), AWSKMSKeyID: os.Getenv("AWS_KMS_KEY_ID"), AWSKMSSigningAlgorithm: getenv("AWS_KMS_SIGNING_ALGORITHM", "RSASSA_PKCS1_V1_5_SHA_256"), AppleTeamID: os.Getenv("APPLE_TEAM_ID"), AppleBundleID: os.Getenv("APPLE_BUNDLE_ID"), AppleEnvironment: getenv("APPLE_APP_ATTEST_ENVIRONMENT", "production"), AppleRootCertificateFile: os.Getenv("APPLE_APP_ATTEST_ROOT_CERT_FILE"), MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second}
 	if cfg.HTTPAddr == "" {
 		return Config{}, errors.New("HTTP_ADDR must not be empty")
 	}
 	if cfg.SupabaseAuthIssuer == "" || cfg.SupabaseAuthAudience == "" {
 		return Config{}, errors.New("SUPABASE_AUTH_ISSUER and SUPABASE_AUTH_AUDIENCE must not be empty")
+	}
+	if cfg.AutoMigrate {
+		if cfg.Environment != "development" && cfg.Environment != "local" {
+			return Config{}, errors.New("AUTO_MIGRATE is allowed only in development or local environments")
+		}
+		if cfg.DatabaseURL == "" {
+			return Config{}, errors.New("DATABASE_URL is required when AUTO_MIGRATE=true")
+		}
 	}
 	if (cfg.Environment == "staging" || cfg.Environment == "production") && cfg.DatabaseURL == "" {
 		return Config{}, errors.New("DATABASE_URL is required for staging and production")

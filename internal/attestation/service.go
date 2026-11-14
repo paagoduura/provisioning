@@ -31,8 +31,9 @@ type ChallengeRepository interface {
 }
 
 type AttestationRecordRepository interface {
-	// SaveAttestationIfCounterAdvances atomically persists a result only when
-	// its counter is greater than the currently stored counter for this key.
+	// SaveAttestationIfCounterAdvances atomically persists device-key evidence
+	// only when its counter advances; session-scoped evidence is stored once per
+	// session and never participates in device-key counter tracking.
 	SaveAttestationIfCounterAdvances(context.Context, string, VerifiedResult, time.Time) (bool, error)
 }
 
@@ -109,8 +110,9 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 			_ = s.audit.Record(ctx, audit.Event{SessionID: sessionID, Type: "DEVICE_ATTESTATION_FAILED", Result: "FAILURE", Reason: FailureCode(err), Provider: input.Provider, At: s.now()})
 		}
 	}()
-	if input.Provider == "" || input.KeyID == "" || input.Assertion == "" {
-		return VerifiedResult{}, errors.New("provider, key_id and assertion are required")
+	sessionScopedProvider := input.Provider == GooglePlayIntegrityProvider
+	if input.Provider == "" || input.Assertion == "" || (!sessionScopedProvider && input.KeyID == "") || (sessionScopedProvider && strings.TrimSpace(input.KeyID) != "") {
+		return VerifiedResult{}, errors.New("provider and assertion are required; key_id must be omitted for Google Play Integrity and supplied for device-key providers")
 	}
 	if input.ChallengeID == "" {
 		return VerifiedResult{}, errors.New("challenge_id is required")
@@ -135,7 +137,7 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 	if err != nil {
 		return VerifiedResult{}, err
 	}
-	if s.devices != nil {
+	if s.devices != nil && !sessionScopedProvider {
 		if session.DeviceID == "" {
 			return VerifiedResult{}, registry.ErrDeviceNotFound
 		}
@@ -143,7 +145,7 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 			return VerifiedResult{}, err
 		}
 	}
-	if s.revocations != nil {
+	if s.revocations != nil && !sessionScopedProvider {
 		revoked, checkErr := s.revocations.IsRevoked(ctx, input.Provider, input.KeyID)
 		if checkErr != nil {
 			return VerifiedResult{}, checkErr
@@ -159,10 +161,20 @@ func (s *Service) Verify(ctx context.Context, sessionID string, input Submission
 	if err != nil {
 		return VerifiedResult{}, err
 	}
-	if result.Provider != input.Provider || result.KeyID != input.KeyID || result.TrustLevel == "" {
+	if result.Provider != input.Provider || result.TrustLevel == "" {
 		return VerifiedResult{}, errors.New("invalid verifier result")
 	}
-	if s.devices != nil {
+	if sessionScopedProvider {
+		if result.BindingScope != BindingScopeSession || result.KeyID != "" || result.Counter != 0 {
+			return VerifiedResult{}, errors.New("Google Play verifier returned device-key identity or counter not supported by its evidence")
+		}
+	} else {
+		if result.KeyID != input.KeyID || (result.BindingScope != "" && result.BindingScope != BindingScopeDeviceKey) {
+			return VerifiedResult{}, errors.New("invalid verifier key binding result")
+		}
+		result.BindingScope = BindingScopeDeviceKey
+	}
+	if s.devices != nil && !sessionScopedProvider {
 		if err := s.devices.RegisterAttestation(ctx, session.UserID, session.DeviceID, registry.KeyMetadata{Provider: result.Provider, KeyID: result.KeyID, PublicKeyDER: result.PublicKeyDER, BundleVersion: result.BundleVersion, Environment: result.Environment, Counter: result.Counter}, s.now()); err != nil {
 			return VerifiedResult{}, err
 		}

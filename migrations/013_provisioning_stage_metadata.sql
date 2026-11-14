@@ -7,13 +7,13 @@ DO $migration$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'provisioning_sessions' AND column_name = 'token_reference'
+        WHERE table_schema = current_schema() AND table_name = 'provisioning_sessions' AND column_name = 'token_reference'
     ) OR NOT EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'provisioning_sessions' AND column_name = 'wrapped_payload'
+        WHERE table_schema = current_schema() AND table_name = 'provisioning_sessions' AND column_name = 'wrapped_payload'
     ) OR NOT EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'provisioning_sessions' AND column_name = 'apdu_receipt'
+        WHERE table_schema = current_schema() AND table_name = 'provisioning_sessions' AND column_name = 'apdu_receipt'
     ) THEN
         RAISE EXCEPTION 'migration 013 stage metadata columns are missing';
     END IF;

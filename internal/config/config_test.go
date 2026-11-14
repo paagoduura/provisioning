@@ -6,12 +6,50 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("HTTP_ADDR", "")
 	t.Setenv("MAX_REQUEST_BODY_BYTES", "")
 	t.Setenv("SHUTDOWN_TIMEOUT_SECONDS", "")
+	t.Setenv("AUTO_MIGRATE", "")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.HTTPAddr != ":8080" || cfg.MaxRequestBodyBytes != 1<<20 || cfg.SupabaseAuthIssuer != "https://haytetewtgbfxnolrhjz.supabase.co/auth/v1" || cfg.SupabaseAuthAudience != "authenticated" {
 		t.Fatalf("unexpected defaults: %+v", cfg)
+	}
+}
+
+func TestAutoMigrateRequiresDatabase(t *testing.T) {
+	t.Setenv("AUTO_MIGRATE", "true")
+	t.Setenv("DATABASE_URL", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected AUTO_MIGRATE to require DATABASE_URL")
+	}
+}
+
+func TestAutoMigrateIsRejectedOutsideDevelopment(t *testing.T) {
+	t.Setenv("AUTO_MIGRATE", "true")
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("ENVIRONMENT", "production")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected AUTO_MIGRATE to be rejected in production")
+	}
+}
+
+func TestAutoMigrateCanBeExplicitlyEnabledInDevelopment(t *testing.T) {
+	t.Setenv("AUTO_MIGRATE", "true")
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("ENVIRONMENT", "development")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AutoMigrate {
+		t.Fatal("expected AUTO_MIGRATE=true to be enabled")
+	}
+}
+
+func TestAutoMigrateRejectsInvalidValue(t *testing.T) {
+	t.Setenv("AUTO_MIGRATE", "sometimes")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected invalid AUTO_MIGRATE value to be rejected")
 	}
 }
 

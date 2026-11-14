@@ -26,6 +26,15 @@ const (
 var ErrInvalidTransition = errors.New("invalid provisioning state transition")
 var ErrSessionNotFound = errors.New("session not found")
 var ErrConcurrentUpdate = errors.New("provisioning session was concurrently updated")
+var ErrWebhookEventConflict = errors.New("webhook event identifier was reused with different content")
+
+// TokenWebhookEvent is the verified, provider-originated event used to advance
+// a session. Repositories persist its identity atomically with the transition.
+type TokenWebhookEvent struct {
+	EventID        string
+	SessionID      string
+	TokenReference string
+}
 
 var transitions = map[ProvisioningState]map[ProvisioningState]bool{
 	StateCreated:              {StateDeviceDiscovered: true, StateFailed: true},

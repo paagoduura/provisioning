@@ -54,6 +54,8 @@ func newGoogleVerifierServer(t *testing.T, response string, status int, requestC
 		EndpointBase:    server.URL,
 		TokenSource:     staticTokenSource{},
 		RequireLicensed: true,
+		MaxTokenAge:     5 * time.Minute,
+		Clock:           func() time.Time { return time.UnixMilli(1730000000000) },
 	}
 	return server, verifier
 }
@@ -72,15 +74,27 @@ func TestGooglePlayIntegrityVerifierAcceptsPolicyCompliantVerdict(t *testing.T) 
 
 	result, err := verifier.Verify(context.Background(), Challenge{}, Submission{
 		Provider:    GooglePlayIntegrityProvider,
-		KeyID:       "android-device-key",
 		Assertion:   googleAssertion(t, "opaque-token"),
 		RequestHash: requestHash,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.TrustLevel != "google-play-integrity-verified" || result.Counter == 0 {
+	if result.TrustLevel != "google-play-integrity-verified" || result.BindingScope != BindingScopeSession || result.KeyID != "" || result.Counter != 0 {
 		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestGooglePlayIntegrityVerifierRejectsUnboundCallerKeyID(t *testing.T) {
+	verifier := GooglePlayIntegrityVerifier{}
+	_, err := verifier.Verify(context.Background(), Challenge{}, Submission{
+		Provider:    GooglePlayIntegrityProvider,
+		KeyID:       "caller-selected-key",
+		Assertion:   googleAssertion(t, "opaque-token"),
+		RequestHash: "request-hash-1",
+	})
+	if !errors.Is(err, ErrGooglePlayInvalidVerdict) {
+		t.Fatalf("expected unbound key rejection, got %v", err)
 	}
 }
 
@@ -91,7 +105,6 @@ func TestGooglePlayIntegrityVerifierRejectsRequestBindingMismatch(t *testing.T) 
 	defer server.Close()
 	_, err := verifier.Verify(context.Background(), Challenge{}, Submission{
 		Provider:    GooglePlayIntegrityProvider,
-		KeyID:       "android-device-key",
 		Assertion:   googleAssertion(t, "opaque-token"),
 		RequestHash: "client-hash",
 	})
@@ -153,5 +166,20 @@ func TestGooglePlayIntegrityVerifierRejectsStaleVerdict(t *testing.T) {
 	})
 	if !errors.Is(err, ErrGooglePlayInvalidVerdict) {
 		t.Fatalf("expected stale verdict rejection, got %v", err)
+	}
+}
+
+func TestGooglePlayIntegrityVerifierDefaultsToRejectingStaleVerdicts(t *testing.T) {
+	server, verifier := newGoogleVerifierServer(t, googleVerdictJSON("request-hash-1", verifierPackageName), http.StatusOK, nil)
+	defer server.Close()
+	verifier.MaxTokenAge = 0
+	verifier.Clock = func() time.Time { return time.UnixMilli(1730000000000).Add(6 * time.Minute) }
+	_, err := verifier.Verify(context.Background(), Challenge{}, Submission{
+		Provider:    GooglePlayIntegrityProvider,
+		Assertion:   googleAssertion(t, "opaque-token"),
+		RequestHash: "request-hash-1",
+	})
+	if !errors.Is(err, ErrGooglePlayInvalidVerdict) {
+		t.Fatalf("expected stale verdict rejection with unset MaxTokenAge, got %v", err)
 	}
 }

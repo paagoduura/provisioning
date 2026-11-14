@@ -63,6 +63,17 @@ func (r *AttestationRepository) Consume(ctx context.Context, id string, now time
 	return c, nil
 }
 func (r *AttestationRepository) SaveAttestationIfCounterAdvances(ctx context.Context, sessionID string, result attestation.VerifiedResult, now time.Time) (bool, error) {
+	if result.BindingScope == attestation.BindingScopeSession {
+		var saved int
+		err := r.pool.QueryRow(ctx, `INSERT INTO device_attestations (session_id, provider, key_id, counter, trust_level, created_at) VALUES ($1, $2, '', 0, $3, $4) ON CONFLICT (session_id, provider, key_id) DO NOTHING RETURNING 1`, sessionID, result.Provider, result.TrustLevel, now).Scan(&saved)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("save session-scoped attestation evidence: %w", err)
+		}
+		return true, nil
+	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("begin attestation counter transaction: %w", err)

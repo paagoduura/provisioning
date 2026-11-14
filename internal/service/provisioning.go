@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/paagoduura/provisioning/internal/adapters/memory"
@@ -20,6 +21,7 @@ type Repository interface {
 	Save(context.Context, domain.ProvisioningSession) (domain.ProvisioningSession, error)
 	FindByIdempotencyKey(context.Context, string) (domain.ProvisioningSession, error)
 	SaveIdempotencyKey(context.Context, string, string) error
+	ReceiveTokenWebhook(context.Context, domain.TokenWebhookEvent, time.Time) (domain.ProvisioningSession, bool, error)
 }
 type CryptoPort interface {
 	CreateChallenge(context.Context, string, string) (string, error)
@@ -171,24 +173,24 @@ func (s *Service) RequestToken(ctx context.Context, id string) (domain.Provision
 	return s.save(ctx, current, "TOKEN_REQUESTED")
 }
 func (s *Service) ReceiveToken(ctx context.Context, event TokenWebhook) (domain.ProvisioningSession, error) {
-	if event.SessionID == "" || event.TokenReference == "" {
+	if event.SessionID == "" || event.TokenReference == "" || strings.TrimSpace(event.EventID) == "" || event.EventID != strings.TrimSpace(event.EventID) || len(event.EventID) > 256 || strings.ContainsAny(event.EventID, "\x00\r\n") {
 		return domain.ProvisioningSession{}, ErrInvalidStageInput
 	}
 	current, err := s.repo.Get(ctx, event.SessionID)
 	if err != nil {
 		return current, err
 	}
-	if current.State == domain.StateTokenReceived && current.TokenReference == event.TokenReference {
-		return current, nil
+	if current.TokenReference == event.TokenReference && (current.State == domain.StateTokenRequested || current.State == domain.StateTokenReceived || current.State == domain.StatePayloadWrapped || current.State == domain.StateTransferStarted || current.State == domain.StateTransferred || current.State == domain.StateDeviceVerified || current.State == domain.StateCompleted) {
+		updated, changed, receiveErr := s.repo.ReceiveTokenWebhook(ctx, domain.TokenWebhookEvent{EventID: event.EventID, SessionID: event.SessionID, TokenReference: event.TokenReference}, s.now())
+		if receiveErr == nil && changed {
+			s.record(ctx, audit.Event{SessionID: event.SessionID, Type: "TOKEN_RECEIVED", Result: "SUCCESS", At: s.now()})
+		}
+		return updated, receiveErr
 	}
-	if err := requireState(current, domain.StateTokenRequested); err != nil {
-		return current, err
-	}
-	if current.TokenReference != event.TokenReference {
+	if current.State == domain.StateTokenRequested && current.TokenReference != event.TokenReference {
 		return s.fail(ctx, current, "TOKEN_REFERENCE_MISMATCH", ErrTokenNotReceived)
 	}
-	current.State = domain.StateTokenReceived
-	return s.save(ctx, current, "TOKEN_RECEIVED")
+	return current, domain.ErrInvalidTransition
 }
 func (s *Service) WrapPayload(ctx context.Context, id string) (domain.ProvisioningSession, error) {
 	if s.wrapper == nil {

@@ -67,6 +67,12 @@ func (v GooglePlayIntegrityVerifier) Verify(ctx context.Context, _ Challenge, in
 	if input.Provider != GooglePlayIntegrityProvider {
 		return VerifiedResult{}, ErrUnsupportedProvider
 	}
+	// Play Integrity provides request/app/device-integrity evidence, not a
+	// stable device-held signing key. Do not let a caller-selected identifier
+	// become a registry key or be represented as cryptographically bound.
+	if strings.TrimSpace(input.KeyID) != "" {
+		return VerifiedResult{}, ErrGooglePlayInvalidVerdict
+	}
 	if v.Client == nil || (len(v.CredentialsJSON) == 0 && v.TokenSource == nil) || strings.TrimSpace(v.PackageName) == "" {
 		return VerifiedResult{}, ErrGooglePlayUnavailable
 	}
@@ -133,25 +139,27 @@ func (v GooglePlayIntegrityVerifier) Verify(ctx context.Context, _ Challenge, in
 	if len(v.RequiredCertificateDigests) > 0 && !containsConfiguredDigest(payload.AppIntegrity.CertificateSha256Digest, v.RequiredCertificateDigests) {
 		return VerifiedResult{}, ErrGooglePlayInvalidVerdict
 	}
-	counter := parseGoogleTimestamp(payload.RequestDetails.TimestampMillis)
-	if counter == 0 {
+	issuedAtMillis := parseGoogleTimestamp(payload.RequestDetails.TimestampMillis)
+	if issuedAtMillis == 0 || int64(issuedAtMillis) <= 0 {
 		return VerifiedResult{}, ErrGooglePlayInvalidVerdict
 	}
-	if v.MaxTokenAge > 0 {
-		now := time.Now()
-		if v.Clock != nil {
-			now = v.Clock()
-		}
-		clockSkew := v.MaxClockSkew
-		if clockSkew <= 0 {
-			clockSkew = 30 * time.Second
-		}
-		issuedAt := time.UnixMilli(int64(counter))
-		if issuedAt.After(now.Add(clockSkew)) || now.Sub(issuedAt) > v.MaxTokenAge {
-			return VerifiedResult{}, ErrGooglePlayInvalidVerdict
-		}
+	maxTokenAge := v.MaxTokenAge
+	if maxTokenAge <= 0 {
+		maxTokenAge = 5 * time.Minute
 	}
-	return VerifiedResult{Provider: input.Provider, KeyID: input.KeyID, Counter: counter, TrustLevel: "google-play-integrity-verified"}, nil
+	now := time.Now()
+	if v.Clock != nil {
+		now = v.Clock()
+	}
+	clockSkew := v.MaxClockSkew
+	if clockSkew <= 0 {
+		clockSkew = 30 * time.Second
+	}
+	issuedAt := time.UnixMilli(int64(issuedAtMillis))
+	if issuedAt.After(now.Add(clockSkew)) || now.Sub(issuedAt) > maxTokenAge {
+		return VerifiedResult{}, ErrGooglePlayInvalidVerdict
+	}
+	return VerifiedResult{Provider: input.Provider, BindingScope: BindingScopeSession, TrustLevel: "google-play-integrity-verified"}, nil
 }
 
 func decodeGooglePlayAssertion(value string) (googlePlayAssertion, error) {

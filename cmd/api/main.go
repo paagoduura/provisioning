@@ -30,6 +30,7 @@ import (
 	"github.com/paagoduura/provisioning/internal/registry"
 	"github.com/paagoduura/provisioning/internal/service"
 	"github.com/paagoduura/provisioning/internal/supabaseauth"
+	"github.com/paagoduura/provisioning/migrations"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 )
@@ -123,6 +124,17 @@ func main() {
 			pool.Close()
 			log.Error("database_unavailable", "error", err)
 			os.Exit(1)
+		}
+		if cfg.AutoMigrate {
+			migrationCtx, migrationCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			err = migrations.Apply(migrationCtx, pool)
+			migrationCancel()
+			if err != nil {
+				pool.Close()
+				log.Error("database_migration_failed", "error", err)
+				os.Exit(1)
+			}
+			log.Info("database_migrations_applied", "mode", "development")
 		}
 		defer pool.Close()
 		repo = postgresadapter.NewSessionRepository(pool)
@@ -256,11 +268,11 @@ func main() {
 			readiness.Check{Name: "database", Required: true, Run: pool.Ping},
 			readiness.Check{Name: "database_migration", Required: true, Run: func(ctx context.Context) error {
 				var applied bool
-				if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 13)`).Scan(&applied); err != nil {
+				if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 14)`).Scan(&applied); err != nil {
 					return err
 				}
 				if !applied {
-					return errors.New("required migration 013 is not applied")
+					return errors.New("required migration 014 is not applied")
 				}
 				return nil
 			}},

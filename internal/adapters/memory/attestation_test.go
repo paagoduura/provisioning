@@ -41,3 +41,18 @@ func TestSaveAttestationIfCounterAdvancesIsAtomic(t *testing.T) {
 		t.Fatal("stale counter was accepted after concurrent updates")
 	}
 }
+
+func TestSessionScopedEvidenceDoesNotUseDeviceKeyCounter(t *testing.T) {
+	repo := NewAttestationRepository()
+	result := attestation.VerifiedResult{Provider: attestation.GooglePlayIntegrityProvider, BindingScope: attestation.BindingScopeSession, TrustLevel: "google-play-integrity-verified"}
+	for _, sessionID := range []string{"session-a", "session-b"} {
+		accepted, err := repo.SaveAttestationIfCounterAdvances(context.Background(), sessionID, result, time.Now())
+		if err != nil || !accepted {
+			t.Fatalf("save session-scoped evidence for %s: accepted=%t err=%v", sessionID, accepted, err)
+		}
+	}
+	accepted, err := repo.SaveAttestationIfCounterAdvances(context.Background(), "session-a", result, time.Now())
+	if err != nil || accepted {
+		t.Fatalf("duplicate session evidence: accepted=%t err=%v, want false/nil", accepted, err)
+	}
+}

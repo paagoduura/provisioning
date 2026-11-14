@@ -1,0 +1,48 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit tests, race detector, and vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -race -count=1 ./...
+      - run: go vet ./...
+
+  postgres-integration:
+    name: PostgreSQL migrations and persistence integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: provisioning_test
+          POSTGRES_PASSWORD: provisioning_test
+          POSTGRES_DB: provisioning_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U provisioning_test -d provisioning_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgres://provisioning_test:provisioning_test@localhost:5432/provisioning_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: make test-integration

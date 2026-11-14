@@ -54,6 +54,14 @@ func (r *AttestationRepository) Consume(ctx context.Context, id string, now time
 func (r *AttestationRepository) SaveAttestationIfCounterAdvances(ctx context.Context, sessionID string, result attestation.VerifiedResult, now time.Time) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if result.BindingScope == attestation.BindingScopeSession {
+		key := result.Provider + "\x00session:" + sessionID
+		if _, exists := r.records[key]; exists {
+			return false, nil
+		}
+		r.records[key] = result
+		return true, nil
+	}
 	key := result.Provider + "\x00" + result.KeyID
 	if previous, ok := r.records[key]; ok && result.Counter <= previous.Counter {
 		return false, nil
