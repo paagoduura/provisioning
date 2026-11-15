@@ -250,3 +250,40 @@ func createSessionForTest(t *testing.T, h *Handler, token, idempotencyKey string
 	}
 	return session
 }
+
+func TestExpiredSessionErrorsReturnGone(t *testing.T) {
+	writeErrors := []struct {
+		name  string
+		write func(http.ResponseWriter, error)
+	}{
+		{name: "stage", write: writeProvisioningStageError},
+		{name: "domain", write: writeDomainError},
+	}
+	for _, test := range writeErrors {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			test.write(recorder, domain.ErrSessionExpired)
+			if recorder.Code != http.StatusGone {
+				t.Fatalf("expired-session status = %d, want %d", recorder.Code, http.StatusGone)
+			}
+		})
+	}
+}
+
+func TestUnresolvedTokenRequestErrorsReturnConflict(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "in progress", err: domain.ErrTokenRequestInProgress},
+		{name: "unknown outcome", err: domain.ErrTokenRequestOutcomeUnknown},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			writeProvisioningStageError(recorder, test.err)
+			if recorder.Code != http.StatusConflict {
+				t.Fatalf("unresolved operation status = %d, want %d", recorder.Code, http.StatusConflict)
+			}
+		})
+	}
+}

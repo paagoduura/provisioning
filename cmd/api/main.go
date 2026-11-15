@@ -162,7 +162,7 @@ func main() {
 	var tokenPort service.TokenPort = mock.InterswitchAdapter{}
 	var tokenWebhook service.TokenWebhookVerifier
 	if cfg.InterswitchTokenURL != "" || cfg.InterswitchRequestURL != "" || cfg.InterswitchClientID != "" || cfg.InterswitchClientSecret != "" || cfg.InterswitchWebhookSecret != "" {
-		client := &interswitch.Client{HTTP: &http.Client{Timeout: 15 * time.Second}, TokenURL: cfg.InterswitchTokenURL, RequestURL: cfg.InterswitchRequestURL, ClientID: cfg.InterswitchClientID, ClientSecret: cfg.InterswitchClientSecret, WebhookSecret: []byte(cfg.InterswitchWebhookSecret), MaxClockSkew: 5 * time.Minute}
+		client := &interswitch.Client{HTTP: &http.Client{Timeout: 15 * time.Second}, TokenURL: cfg.InterswitchTokenURL, RequestURL: cfg.InterswitchRequestURL, ClientID: cfg.InterswitchClientID, ClientSecret: cfg.InterswitchClientSecret, WebhookSecret: []byte(cfg.InterswitchWebhookSecret), IdempotencyKeyHeader: cfg.InterswitchIdempotencyKeySupported, MaxClockSkew: 5 * time.Minute}
 		tokenPort, tokenWebhook = client, client
 		log.Info("token_provider_selected", "provider", "interswitch")
 	} else {
@@ -268,11 +268,11 @@ func main() {
 			readiness.Check{Name: "database", Required: true, Run: pool.Ping},
 			readiness.Check{Name: "database_migration", Required: true, Run: func(ctx context.Context) error {
 				var applied bool
-				if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 14)`).Scan(&applied); err != nil {
+				if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 16)`).Scan(&applied); err != nil {
 					return err
 				}
 				if !applied {
-					return errors.New("required migration 014 is not applied")
+					return errors.New("required migration 016 is not applied")
 				}
 				return nil
 			}},

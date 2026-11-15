@@ -105,7 +105,7 @@ func TestWebhookEventDedupeIsIdempotentAndRejectsIDReuse(t *testing.T) {
 	repo := NewSessionRepository()
 	ctx := context.Background()
 	now := time.Now().UTC()
-	session := domain.ProvisioningSession{ID: "session-webhook", IdempotencyKey: "idem-webhook", UserID: "user-webhook", DeviceUID: "device-webhook", DeviceModel: "device-model", Transport: "nfc", State: domain.StateTokenRequested, TokenReference: "provider-reference", Version: 1}
+	session := domain.ProvisioningSession{ID: "session-webhook", IdempotencyKey: "idem-webhook", UserID: "user-webhook", DeviceUID: "device-webhook", DeviceModel: "device-model", Transport: "nfc", State: domain.StateTokenRequested, TokenReference: "provider-reference", Version: 1, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}
 	if _, created, err := repo.Create(ctx, session); err != nil || !created {
 		t.Fatalf("create prerequisite session: created=%t err=%v", created, err)
 	}
@@ -120,7 +120,7 @@ func TestWebhookEventDedupeIsIdempotentAndRejectsIDReuse(t *testing.T) {
 	if first.State != domain.StateTokenReceived || first.Version != 2 {
 		t.Fatalf("first delivery = state %s version %d; want received/version 2", first.State, first.Version)
 	}
-	retry, changed, err := repo.ReceiveTokenWebhook(ctx, event, now.Add(time.Second))
+	retry, changed, err := repo.ReceiveTokenWebhook(ctx, event, now.Add(2*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestWebhookEventDedupeIsIdempotentAndRejectsIDReuse(t *testing.T) {
 
 	semanticRetry := event
 	semanticRetry.EventID = "provider-event-retry"
-	semantic, changed, err := repo.ReceiveTokenWebhook(ctx, semanticRetry, now.Add(2*time.Second))
+	semantic, changed, err := repo.ReceiveTokenWebhook(ctx, semanticRetry, now.Add(3*time.Minute))
 	if err != nil || semantic.Version != first.Version {
 		t.Fatalf("same signed semantic payload was not idempotent: session=%+v err=%v", semantic, err)
 	}
@@ -143,7 +143,37 @@ func TestWebhookEventDedupeIsIdempotentAndRejectsIDReuse(t *testing.T) {
 
 	reusedID := event
 	reusedID.TokenReference = "different-reference"
-	if _, _, err := repo.ReceiveTokenWebhook(ctx, reusedID, now.Add(3*time.Second)); !errors.Is(err, domain.ErrWebhookEventConflict) {
+	if _, _, err := repo.ReceiveTokenWebhook(ctx, reusedID, now.Add(4*time.Minute)); !errors.Is(err, domain.ErrWebhookEventConflict) {
 		t.Fatalf("event ID reuse error = %v, want content conflict", err)
+	}
+}
+
+func TestExpiredWebhookDoesNotPersistEventOrAdvanceSession(t *testing.T) {
+	ctx := context.Background()
+	expiresAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	repo := NewSessionRepository()
+	session := domain.ProvisioningSession{ID: "expired-webhook", IdempotencyKey: "expired-webhook-key", UserID: "user", DeviceUID: "device", DeviceModel: "model", Transport: "nfc", State: domain.StateTokenRequested, TokenReference: "provider-reference", Version: 1, CreatedAt: expiresAt.Add(-time.Minute), ExpiresAt: expiresAt}
+	if _, created, err := repo.Create(ctx, session); err != nil || !created {
+		t.Fatalf("create session: created=%t err=%v", created, err)
+	}
+	event := domain.TokenWebhookEvent{EventID: "expired-event", SessionID: session.ID, TokenReference: session.TokenReference}
+	if _, changed, err := repo.ReceiveTokenWebhook(ctx, event, expiresAt); !errors.Is(err, domain.ErrSessionExpired) {
+		t.Fatalf("at-expiry error = %v, want ErrSessionExpired (changed=%t)", err, changed)
+	}
+	stored, err := repo.Get(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != domain.StateTokenRequested || stored.Version != 1 {
+		t.Fatalf("expired callback mutated session: state=%s version=%d", stored.State, stored.Version)
+	}
+	if len(repo.webhookEvents) != 0 || len(repo.webhookPayloads) != 0 {
+		t.Fatalf("expired callback persisted dedupe state: events=%d payloads=%d", len(repo.webhookEvents), len(repo.webhookPayloads))
+	}
+
+	// A retry with the same event identity before expiry remains usable, proving
+	// that the rejected delivery did not reserve or poison its dedupe key.
+	if _, changed, err := repo.ReceiveTokenWebhook(ctx, event, expiresAt.Add(-time.Nanosecond)); err != nil || !changed {
+		t.Fatalf("pre-expiry retry: changed=%t err=%v, want successful transition", changed, err)
 	}
 }

@@ -124,6 +124,39 @@ func (r *SessionRepository) ReceiveTokenWebhook(ctx context.Context, event domai
 	if err != nil {
 		return domain.ProvisioningSession{}, false, fmt.Errorf("lock webhook session: %w", err)
 	}
+	if (session.State == domain.StateTokenRequested || session.State == domain.StateTokenRequesting) && session.Expired(now) {
+		return domain.ProvisioningSession{}, false, domain.ErrSessionExpired
+	}
+	if session.State == domain.StateTokenRequesting {
+		if session.TokenReference != "" && session.TokenReference != event.TokenReference {
+			return domain.ProvisioningSession{}, false, domain.ErrTokenRequestConflict
+		}
+		operation, err := loadTokenRequestOperation(ctx, tx, event.SessionID, true)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ProvisioningSession{}, false, errTokenRequestOperationMissing
+		}
+		if err != nil {
+			return domain.ProvisioningSession{}, false, fmt.Errorf("lock token request operation for webhook: %w", err)
+		}
+		if operation.Status == domain.TokenRequestSucceeded && operation.ProviderReference != event.TokenReference {
+			return domain.ProvisioningSession{}, false, domain.ErrTokenRequestConflict
+		}
+		if err := markTokenRequestSucceeded(ctx, tx, event.SessionID, event.TokenReference, now); err != nil {
+			return domain.ProvisioningSession{}, false, err
+		}
+		if err := tx.QueryRow(ctx, `UPDATE provisioning_sessions SET state=$2, token_reference=$3, version=version+1 WHERE id=$1 AND version=$4 RETURNING version`, session.ID, domain.StateTokenReceived, event.TokenReference, session.Version).Scan(&session.Version); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.ProvisioningSession{}, false, domain.ErrConcurrentUpdate
+			}
+			return domain.ProvisioningSession{}, false, fmt.Errorf("advance webhook-resolved token request: %w", err)
+		}
+		session.State = domain.StateTokenReceived
+		session.TokenReference = event.TokenReference
+		if err := tx.Commit(ctx); err != nil {
+			return domain.ProvisioningSession{}, false, fmt.Errorf("commit webhook-resolved token request: %w", err)
+		}
+		return session, true, nil
+	}
 	if session.TokenReference != event.TokenReference {
 		return domain.ProvisioningSession{}, false, domain.ErrInvalidTransition
 	}

@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("HTTP_ADDR", "")
@@ -53,6 +56,26 @@ func TestAutoMigrateRejectsInvalidValue(t *testing.T) {
 	}
 }
 
+func TestInterswitchIdempotencySupportIsOptIn(t *testing.T) {
+	t.Setenv("INTERSWITCH_SUPPORTS_IDEMPOTENCY_KEY", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.InterswitchIdempotencyKeySupported {
+		t.Fatal("provider idempotency header must remain disabled unless explicitly confirmed")
+	}
+	t.Setenv("INTERSWITCH_SUPPORTS_IDEMPOTENCY_KEY", "true")
+	cfg, err = Load()
+	if err != nil || !cfg.InterswitchIdempotencyKeySupported {
+		t.Fatalf("explicit provider idempotency support was not enabled: cfg=%+v err=%v", cfg, err)
+	}
+	t.Setenv("INTERSWITCH_SUPPORTS_IDEMPOTENCY_KEY", "maybe")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid provider idempotency support value should fail closed")
+	}
+}
+
 func TestLoadRejectsUnsafeBodyLimit(t *testing.T) {
 	t.Setenv("MAX_REQUEST_BODY_BYTES", "100")
 	if _, err := Load(); err == nil {
@@ -69,14 +92,63 @@ func TestLoadRejectsEphemeralPersistenceOutsideDevelopment(t *testing.T) {
 }
 
 func TestLoadRequiresRedisOutsideDevelopment(t *testing.T) {
-	t.Setenv("ENVIRONMENT", "staging")
-	t.Setenv("DATABASE_URL", "postgres://example")
+	setValidStagingEnv(t)
 	t.Setenv("REDIS_URL", "")
-	t.Setenv("ATTESTATION_PROVIDER", "aws-kms")
-	t.Setenv("AWS_KMS_KEY_ID", "key-1")
-	if _, err := Load(); err == nil {
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "REDIS_URL") {
 		t.Fatal("expected staging to require REDIS_URL")
 	}
+}
+
+func TestStagingRequiresAllInterSwitchSettings(t *testing.T) {
+	for _, name := range []string{
+		"INTERSWITCH_TOKEN_URL",
+		"INTERSWITCH_REQUEST_URL",
+		"INTERSWITCH_CLIENT_ID",
+		"INTERSWITCH_CLIENT_SECRET",
+		"INTERSWITCH_WEBHOOK_SECRET",
+	} {
+		t.Run(name, func(t *testing.T) {
+			setValidStagingEnv(t)
+			t.Setenv(name, "")
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("Load error = %v, want required-setting error naming %s", err, name)
+			}
+		})
+	}
+}
+
+func TestCompleteStagingConfigAcceptsInferredKMSProvider(t *testing.T) {
+	setValidStagingEnv(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AttestationProvider != "aws-kms" {
+		t.Fatalf("attestation provider = %q, want aws-kms inferred from AWS_KMS_KEY_ID", cfg.AttestationProvider)
+	}
+}
+
+func TestStagingRejectsMalformedRedisURL(t *testing.T) {
+	setValidStagingEnv(t)
+	t.Setenv("REDIS_URL", "https://redis.example.invalid")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "REDIS_URL") {
+		t.Fatalf("Load error = %v, want invalid REDIS_URL failure", err)
+	}
+}
+
+func setValidStagingEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("ENVIRONMENT", "staging")
+	t.Setenv("DATABASE_URL", "postgresql://staging-user:secret@postgres.example.invalid:5432/provisioning?sslmode=require")
+	t.Setenv("REDIS_URL", "rediss://staging-user:secret@redis.example.invalid:6379/0")
+	t.Setenv("INTERSWITCH_TOKEN_URL", "https://api.example.invalid/oauth/token")
+	t.Setenv("INTERSWITCH_REQUEST_URL", "https://api.example.invalid/token/request")
+	t.Setenv("INTERSWITCH_CLIENT_ID", "staging-client")
+	t.Setenv("INTERSWITCH_CLIENT_SECRET", "staging-client-secret")
+	t.Setenv("INTERSWITCH_WEBHOOK_SECRET", "staging-webhook-secret")
+	t.Setenv("ATTESTATION_PROVIDER", "")
+	t.Setenv("AWS_KMS_KEY_ID", "arn:aws:kms:eu-north-1:123456789012:key/11111111-2222-3333-4444-555555555555")
+	t.Setenv("AUTO_MIGRATE", "false")
 }
 
 func TestLoadInfersKMSProviderFromKey(t *testing.T) {

@@ -17,6 +17,7 @@ type SessionRepository struct {
 	idempotencyKey  map[string]string
 	webhookEvents   map[string]storedWebhookEvent
 	webhookPayloads map[string]struct{}
+	tokenRequests   map[string]domain.TokenRequestOperation
 }
 
 type storedWebhookEvent struct {
@@ -25,7 +26,7 @@ type storedWebhookEvent struct {
 }
 
 func NewSessionRepository() *SessionRepository {
-	return &SessionRepository{sessions: make(map[string]domain.ProvisioningSession), idempotencyKey: make(map[string]string), webhookEvents: make(map[string]storedWebhookEvent), webhookPayloads: make(map[string]struct{})}
+	return &SessionRepository{sessions: make(map[string]domain.ProvisioningSession), idempotencyKey: make(map[string]string), webhookEvents: make(map[string]storedWebhookEvent), webhookPayloads: make(map[string]struct{}), tokenRequests: make(map[string]domain.TokenRequestOperation)}
 }
 
 func (r *SessionRepository) Create(ctx context.Context, s domain.ProvisioningSession) (domain.ProvisioningSession, bool, error) {
@@ -71,7 +72,7 @@ func (r *SessionRepository) Save(ctx context.Context, s domain.ProvisioningSessi
 
 // ReceiveTokenWebhook commits event identity and the state change under one
 // lock. Reuse of an event identifier is idempotent only for identical content.
-func (r *SessionRepository) ReceiveTokenWebhook(_ context.Context, event domain.TokenWebhookEvent, _ time.Time) (domain.ProvisioningSession, bool, error) {
+func (r *SessionRepository) ReceiveTokenWebhook(_ context.Context, event domain.TokenWebhookEvent, now time.Time) (domain.ProvisioningSession, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	payload := sha256.Sum256([]byte(event.SessionID + "\x00" + event.TokenReference))
@@ -97,11 +98,34 @@ func (r *SessionRepository) ReceiveTokenWebhook(_ context.Context, event domain.
 	if !ok {
 		return domain.ProvisioningSession{}, false, ErrNotFound
 	}
-	if session.TokenReference != event.TokenReference {
-		return domain.ProvisioningSession{}, false, domain.ErrInvalidTransition
+	if (session.State == domain.StateTokenRequested || session.State == domain.StateTokenRequesting) && session.Expired(now) {
+		return domain.ProvisioningSession{}, false, domain.ErrSessionExpired
 	}
 	changed := false
-	if session.State == domain.StateTokenRequested {
+	if session.State == domain.StateTokenRequesting {
+		if session.TokenReference != "" && session.TokenReference != event.TokenReference {
+			return domain.ProvisioningSession{}, false, domain.ErrTokenRequestConflict
+		}
+		operation, exists := r.tokenRequests[event.SessionID]
+		if !exists {
+			return domain.ProvisioningSession{}, false, errTokenRequestOperationMissing
+		}
+		if operation.Status == domain.TokenRequestSucceeded && operation.ProviderReference != event.TokenReference {
+			return domain.ProvisioningSession{}, false, domain.ErrTokenRequestConflict
+		}
+		operation.Status = domain.TokenRequestSucceeded
+		operation.ProviderReference = event.TokenReference
+		operation.LastErrorCode = ""
+		operation.UpdatedAt = now
+		r.tokenRequests[event.SessionID] = operation
+		session.TokenReference = event.TokenReference
+		session.State = domain.StateTokenReceived
+		session.Version++
+		r.sessions[event.SessionID] = session
+		changed = true
+	} else if session.TokenReference != event.TokenReference {
+		return domain.ProvisioningSession{}, false, domain.ErrInvalidTransition
+	} else if session.State == domain.StateTokenRequested {
 		session.State = domain.StateTokenReceived
 		session.Version++
 		r.sessions[event.SessionID] = session

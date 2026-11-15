@@ -21,16 +21,17 @@ import (
 )
 
 type Client struct {
-	HTTP          *http.Client
-	TokenURL      string
-	RequestURL    string
-	ClientID      string
-	ClientSecret  string
-	WebhookSecret []byte
-	MaxClockSkew  time.Duration
-	mu            sync.Mutex
-	accessToken   string
-	expiresAt     time.Time
+	HTTP                 *http.Client
+	TokenURL             string
+	RequestURL           string
+	ClientID             string
+	ClientSecret         string
+	WebhookSecret        []byte
+	IdempotencyKeyHeader bool
+	MaxClockSkew         time.Duration
+	mu                   sync.Mutex
+	accessToken          string
+	expiresAt            time.Time
 }
 type oauthResponse struct {
 	AccessToken string `json:"access_token"`
@@ -41,8 +42,8 @@ type requestResponse struct {
 	Reference string `json:"token_reference"`
 }
 
-func (c *Client) RequestToken(ctx context.Context, sessionID string) (string, error) {
-	if strings.TrimSpace(sessionID) == "" || c == nil || c.HTTP == nil || c.RequestURL == "" {
+func (c *Client) RequestToken(ctx context.Context, sessionID, idempotencyKey string) (string, error) {
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(idempotencyKey) == "" || c == nil || c.HTTP == nil || c.RequestURL == "" {
 		return "", errors.New("interswitch token request is not configured")
 	}
 	if err := requireHTTPS(c.RequestURL); err != nil {
@@ -60,6 +61,9 @@ func (c *Client) RequestToken(ctx context.Context, sessionID string) (string, er
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	if c.IdempotencyKeyHeader {
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("interswitch token request: %w", err)

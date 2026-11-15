@@ -69,8 +69,15 @@ func TestMigrationsApplyInOrderAndAreReplayable(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatalf("read migration ledger: %v", err)
 	}
-	if version != 14 {
-		t.Fatalf("latest migration ledger version = %d, want 14", version)
+	if version != 16 {
+		t.Fatalf("latest migration ledger version = %d, want 16", version)
+	}
+	var recorded int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version BETWEEN 1 AND 15`).Scan(&recorded); err != nil {
+		t.Fatalf("count migration ledger baseline: %v", err)
+	}
+	if recorded != 15 {
+		t.Fatalf("recorded migration baseline entries = %d, want 15", recorded)
 	}
 	var columns int
 	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'provisioning_sessions' AND column_name IN ('version','token_reference','wrapped_payload','apdu_receipt')`).Scan(&columns); err != nil {
@@ -263,7 +270,7 @@ func TestPostgresWebhookDeduplicationIsAtomicUnderConcurrency(t *testing.T) {
 
 	semanticRetry := event
 	semanticRetry.EventID = "provider-retry-" + uuid.NewString()
-	result, changed, err := repo.ReceiveTokenWebhook(ctx, semanticRetry, time.Now().UTC())
+	result, changed, err := repo.ReceiveTokenWebhook(ctx, semanticRetry, now.Add(2*time.Minute))
 	if err != nil || result.Version != 2 || changed {
 		t.Fatalf("same semantic delivery was not idempotent: session=%+v err=%v", result, err)
 	}
@@ -291,5 +298,207 @@ func TestPostgresRejectsInvalidPersistedTransport(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "check constraint") {
 		t.Fatalf("expected real CHECK constraint failure, got %v", err)
+	}
+}
+
+func TestPostgresExpiredWebhookRollsBackEventAtExpiryBoundary(t *testing.T) {
+	pool, ctx := openPostgres(t)
+	applyMigrations(t, ctx, pool)
+	repo := postgres.NewSessionRepository(pool)
+	expiresAt := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	session := domain.ProvisioningSession{ID: uuid.NewString(), IdempotencyKey: "expired-webhook-" + uuid.NewString(), UserID: "expired-webhook-owner", DeviceUID: "expired-webhook-device-" + uuid.NewString(), DeviceModel: "integration-hardware", Transport: "nfc", State: domain.StateTokenRequested, TokenReference: "provider-reference-" + uuid.NewString(), Version: 1, Correlation: uuid.NewString(), CreatedAt: expiresAt.Add(-time.Minute), ExpiresAt: expiresAt}
+	if _, created, err := repo.Create(ctx, session); err != nil || !created {
+		t.Fatalf("create prerequisite session: created=%t err=%v", created, err)
+	}
+	event := domain.TokenWebhookEvent{EventID: "expired-event-" + uuid.NewString(), SessionID: session.ID, TokenReference: session.TokenReference}
+	const deliveries = 12
+	start := make(chan struct{})
+	results := make(chan error, deliveries)
+	var wg sync.WaitGroup
+	for range deliveries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _, err := repo.ReceiveTokenWebhook(ctx, event, expiresAt)
+			results <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	for err := range results {
+		if !errors.Is(err, domain.ErrSessionExpired) {
+			t.Fatalf("expired concurrent delivery error = %v, want ErrSessionExpired", err)
+		}
+	}
+	stored, err := repo.Get(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != domain.StateTokenRequested || stored.Version != 1 {
+		t.Fatalf("expired callback mutated session: state=%s version=%d", stored.State, stored.Version)
+	}
+	var eventCount int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM interswitch_webhook_events WHERE session_id = $1`, session.ID).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 0 {
+		t.Fatalf("expired callback persisted %d webhook events, want 0", eventCount)
+	}
+	requesting := domain.ProvisioningSession{ID: uuid.NewString(), IdempotencyKey: "expired-requesting-webhook-" + uuid.NewString(), UserID: "expired-requesting-owner", DeviceUID: "expired-requesting-device-" + uuid.NewString(), DeviceModel: "integration-hardware", Transport: "ble", State: domain.StateSessionAuthenticated, Version: 1, Correlation: uuid.NewString(), CreatedAt: expiresAt.Add(-time.Minute), ExpiresAt: expiresAt}
+	if _, created, err := repo.Create(ctx, requesting); err != nil || !created {
+		t.Fatalf("create in-flight request session: created=%t err=%v", created, err)
+	}
+	if claim, err := repo.ClaimTokenRequest(ctx, requesting.ID, expiresAt.Add(-time.Nanosecond)); err != nil || !claim.Claimed {
+		t.Fatalf("claim before expiry: claimed=%t err=%v", claim.Claimed, err)
+	}
+	lateEvent := domain.TokenWebhookEvent{EventID: "late-requesting-event-" + uuid.NewString(), SessionID: requesting.ID, TokenReference: "late-provider-reference"}
+	if _, _, err := repo.ReceiveTokenWebhook(ctx, lateEvent, expiresAt); !errors.Is(err, domain.ErrSessionExpired) {
+		t.Fatalf("in-flight session exact-expiry callback error = %v, want ErrSessionExpired", err)
+	}
+	requestingStored, err := repo.Get(ctx, requesting.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requestingStored.State != domain.StateTokenRequesting || requestingStored.Version != 2 {
+		t.Fatalf("late in-flight callback changed session: state=%s version=%d", requestingStored.State, requestingStored.Version)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM interswitch_webhook_events WHERE session_id = $1`, requesting.ID).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 0 {
+		t.Fatalf("expired in-flight callback persisted %d webhook events, want 0", eventCount)
+	}
+}
+
+func TestPostgresTokenRequestClaimIsAtomicAndCompletionIsIdempotent(t *testing.T) {
+	pool, ctx := openPostgres(t)
+	applyMigrations(t, ctx, pool)
+	repo := postgres.NewSessionRepository(pool)
+	now := time.Now().UTC()
+	session := domain.ProvisioningSession{ID: uuid.NewString(), IdempotencyKey: "token-claim-" + uuid.NewString(), UserID: "token-claim-owner", DeviceUID: "token-claim-device-" + uuid.NewString(), DeviceModel: "integration-hardware", Transport: "ble", State: domain.StateSessionAuthenticated, Version: 1, Correlation: uuid.NewString(), CreatedAt: now, ExpiresAt: now.Add(5 * time.Minute)}
+	if _, created, err := repo.Create(ctx, session); err != nil || !created {
+		t.Fatalf("create prerequisite session: created=%t err=%v", created, err)
+	}
+	const callers = 20
+	start := make(chan struct{})
+	claims := make(chan domain.TokenRequestClaim, callers)
+	errs := make(chan error, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			claim, err := repo.ClaimTokenRequest(ctx, session.ID, now)
+			if err != nil {
+				errs <- err
+				return
+			}
+			claims <- claim
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(claims)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent token claim: %v", err)
+	}
+	claimCount := 0
+	var stableKey string
+	for claim := range claims {
+		if claim.Claimed {
+			claimCount++
+		}
+		if claim.Operation.Status != domain.TokenRequestPending {
+			t.Fatalf("claim operation status = %s, want pending", claim.Operation.Status)
+		}
+		if stableKey == "" {
+			stableKey = claim.Operation.IdempotencyKey
+		}
+		if claim.Operation.IdempotencyKey != stableKey {
+			t.Fatalf("claim returned unstable provider key %q vs %q", claim.Operation.IdempotencyKey, stableKey)
+		}
+	}
+	if claimCount != 1 || stableKey != domain.TokenRequestIdempotencyKey(session.ID) {
+		t.Fatalf("durable claim winners=%d key=%q, want one winner and stable per-session key", claimCount, stableKey)
+	}
+	completed, changed, err := repo.CompleteTokenRequest(ctx, session.ID, "provider-reference-"+uuid.NewString(), now.Add(time.Second))
+	if err != nil || !changed || completed.State != domain.StateTokenRequested {
+		t.Fatalf("complete token operation: session=%+v changed=%t err=%v", completed, changed, err)
+	}
+	completedAgain, changed, err := repo.CompleteTokenRequest(ctx, session.ID, completed.TokenReference, now.Add(2*time.Second))
+	if err != nil || changed || completedAgain.Version != completed.Version {
+		t.Fatalf("idempotent completion changed state: session=%+v changed=%t err=%v", completedAgain, changed, err)
+	}
+	claim, err := repo.ClaimTokenRequest(ctx, session.ID, now.Add(2*time.Second))
+	if err != nil || claim.Claimed || claim.Operation.Status != domain.TokenRequestSucceeded {
+		t.Fatalf("completed operation was not idempotent: claim=%+v err=%v", claim, err)
+	}
+}
+
+func TestPostgresUnknownTokenRequestCanBeResolvedByWebhook(t *testing.T) {
+	pool, ctx := openPostgres(t)
+	applyMigrations(t, ctx, pool)
+	repo := postgres.NewSessionRepository(pool)
+	now := time.Now().UTC()
+	session := domain.ProvisioningSession{ID: uuid.NewString(), IdempotencyKey: "token-unknown-" + uuid.NewString(), UserID: "token-unknown-owner", DeviceUID: "token-unknown-device-" + uuid.NewString(), DeviceModel: "integration-hardware", Transport: "nfc", State: domain.StateSessionAuthenticated, Version: 1, Correlation: uuid.NewString(), CreatedAt: now, ExpiresAt: now.Add(5 * time.Minute)}
+	if _, created, err := repo.Create(ctx, session); err != nil || !created {
+		t.Fatalf("create prerequisite session: created=%t err=%v", created, err)
+	}
+	if claim, err := repo.ClaimTokenRequest(ctx, session.ID, now); err != nil || !claim.Claimed {
+		t.Fatalf("claim token operation: claimed=%t err=%v", claim.Claimed, err)
+	}
+	unknown, err := repo.MarkTokenRequestUnknown(ctx, session.ID, "PROVIDER_CALL_OUTCOME_UNKNOWN", now.Add(time.Second))
+	if err != nil || unknown.Operation.Status != domain.TokenRequestUnknown {
+		t.Fatalf("mark ambiguous operation unknown: claim=%+v err=%v", unknown, err)
+	}
+	retry, err := repo.ClaimTokenRequest(ctx, session.ID, now.Add(2*time.Second))
+	if err != nil || retry.Claimed || retry.Operation.Status != domain.TokenRequestUnknown {
+		t.Fatalf("unknown operation was claimable again: claim=%+v err=%v", retry, err)
+	}
+	event := domain.TokenWebhookEvent{EventID: "resolve-event-" + uuid.NewString(), SessionID: session.ID, TokenReference: "resolved-provider-reference"}
+	resolved, changed, err := repo.ReceiveTokenWebhook(ctx, event, now.Add(3*time.Second))
+	if err != nil || !changed || resolved.State != domain.StateTokenReceived || resolved.TokenReference != event.TokenReference {
+		t.Fatalf("webhook did not resolve unknown operation: session=%+v changed=%t err=%v", resolved, changed, err)
+	}
+	var status, providerReference string
+	if err := pool.QueryRow(ctx, `SELECT status, provider_reference FROM token_request_operations WHERE session_id = $1`, session.ID).Scan(&status, &providerReference); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(domain.TokenRequestSucceeded) || providerReference != event.TokenReference {
+		t.Fatalf("persisted operation status/reference = %q/%q, want succeeded/%q", status, providerReference, event.TokenReference)
+	}
+}
+
+func TestPostgresLateProviderSuccessIsRecordedWithoutAdvancingExpiredSession(t *testing.T) {
+	pool, ctx := openPostgres(t)
+	applyMigrations(t, ctx, pool)
+	repo := postgres.NewSessionRepository(pool)
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Minute)
+	session := domain.ProvisioningSession{ID: uuid.NewString(), IdempotencyKey: "late-provider-success-" + uuid.NewString(), UserID: "late-provider-owner", DeviceUID: "late-provider-device-" + uuid.NewString(), DeviceModel: "integration-hardware", Transport: "ble", State: domain.StateSessionAuthenticated, Version: 1, Correlation: uuid.NewString(), CreatedAt: now, ExpiresAt: expiresAt}
+	if _, created, err := repo.Create(ctx, session); err != nil || !created {
+		t.Fatalf("create prerequisite session: created=%t err=%v", created, err)
+	}
+	if claim, err := repo.ClaimTokenRequest(ctx, session.ID, now); err != nil || !claim.Claimed {
+		t.Fatalf("claim before expiry: claimed=%t err=%v", claim.Claimed, err)
+	}
+	providerReference := "late-provider-reference-" + uuid.NewString()
+	updated, changed, err := repo.CompleteTokenRequest(ctx, session.ID, providerReference, expiresAt)
+	if !errors.Is(err, domain.ErrSessionExpired) || changed {
+		t.Fatalf("late completion: changed=%t err=%v, want no transition and ErrSessionExpired", changed, err)
+	}
+	if updated.State != domain.StateTokenRequesting || updated.Version != 2 || updated.TokenReference != "" {
+		t.Fatalf("late provider result advanced the expired session: %+v", updated)
+	}
+	var status, storedReference string
+	if err := pool.QueryRow(ctx, `SELECT status, provider_reference FROM token_request_operations WHERE session_id = $1`, session.ID).Scan(&status, &storedReference); err != nil {
+		t.Fatal(err)
+	}
+	if status != string(domain.TokenRequestSucceeded) || storedReference != providerReference {
+		t.Fatalf("late provider result not recorded for reconciliation: status=%q reference=%q", status, storedReference)
 	}
 }

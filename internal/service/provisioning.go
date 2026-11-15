@@ -22,6 +22,9 @@ type Repository interface {
 	FindByIdempotencyKey(context.Context, string) (domain.ProvisioningSession, error)
 	SaveIdempotencyKey(context.Context, string, string) error
 	ReceiveTokenWebhook(context.Context, domain.TokenWebhookEvent, time.Time) (domain.ProvisioningSession, bool, error)
+	ClaimTokenRequest(context.Context, string, time.Time) (domain.TokenRequestClaim, error)
+	MarkTokenRequestUnknown(context.Context, string, string, time.Time) (domain.TokenRequestClaim, error)
+	CompleteTokenRequest(context.Context, string, string, time.Time) (domain.ProvisioningSession, bool, error)
 }
 type CryptoPort interface {
 	CreateChallenge(context.Context, string, string) (string, error)
@@ -34,7 +37,7 @@ type DeviceVerifier interface {
 	VerifyDevice(context.Context, domain.ProvisioningSession, string) error
 }
 type TokenPort interface {
-	RequestToken(context.Context, string) (string, error)
+	RequestToken(context.Context, string, string) (string, error)
 }
 type PayloadWrapper interface {
 	WrapPayload(context.Context, domain.ProvisioningSession, string) (string, error)
@@ -128,7 +131,7 @@ func (s *Service) Attest(ctx context.Context, id, deviceResponse string) (domain
 		return current, err
 	}
 	if current.Expired(s.now()) {
-		return current, errors.New("session expired")
+		return current, domain.ErrSessionExpired
 	}
 	challenge, err := s.crypto.CreateChallenge(ctx, current.DeviceUID, current.ID)
 	if err != nil {
@@ -154,23 +157,64 @@ func (s *Service) RequestToken(ctx context.Context, id string) (domain.Provision
 	if s.tokens == nil {
 		return domain.ProvisioningSession{}, ErrStageUnavailable
 	}
-	current, err := s.repo.Get(ctx, id)
+	now := s.now()
+	claim, err := s.repo.ClaimTokenRequest(ctx, id, now)
 	if err != nil {
-		return current, err
+		return claim.Session, err
 	}
-	if err := requireState(current, domain.StateSessionAuthenticated); err != nil {
-		return current, err
+	if !claim.Claimed {
+		switch claim.Operation.Status {
+		case domain.TokenRequestSucceeded:
+			if claim.Session.State == domain.StateTokenRequesting {
+				return claim.Session, domain.ErrSessionExpired
+			}
+			return claim.Session, nil
+		case domain.TokenRequestUnknown:
+			return claim.Session, domain.ErrTokenRequestOutcomeUnknown
+		default:
+			return claim.Session, domain.ErrTokenRequestInProgress
+		}
 	}
-	ref, err := s.tokens.RequestToken(ctx, id)
+	s.record(ctx, audit.Event{SessionID: id, Type: "TOKEN_REQUEST_CLAIMED", Result: "PENDING", Reason: "TOKEN_REQUEST_CLAIMED", At: now})
+	providerReference, callErr := s.tokens.RequestToken(ctx, id, claim.Operation.IdempotencyKey)
+	if callErr != nil {
+		return s.markTokenRequestUnknown(ctx, id, "PROVIDER_CALL_OUTCOME_UNKNOWN", claim.Session)
+	}
+	if strings.TrimSpace(providerReference) == "" {
+		return s.markTokenRequestUnknown(ctx, id, "EMPTY_PROVIDER_REFERENCE", claim.Session)
+	}
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	updated, changed, completeErr := s.repo.CompleteTokenRequest(persistCtx, id, providerReference, s.now())
+	if completeErr != nil {
+		if errors.Is(completeErr, domain.ErrSessionExpired) || errors.Is(completeErr, domain.ErrTokenRequestConflict) {
+			return updated, completeErr
+		}
+		// The provider may have created a token even if local persistence failed.
+		// A local retry with the same reference is safe; a second provider call is not.
+		updated, changed, completeErr = s.repo.CompleteTokenRequest(persistCtx, id, providerReference, s.now())
+		if completeErr != nil {
+			return s.markTokenRequestUnknown(persistCtx, id, "PROVIDER_RESULT_PERSISTENCE_UNKNOWN", updated)
+		}
+	}
+	if changed {
+		s.record(ctx, audit.Event{SessionID: id, Type: "TOKEN_REQUESTED", Result: "SUCCESS", Reason: "TOKEN_REQUEST_COMPLETED", At: s.now()})
+	}
+	return updated, nil
+}
+
+func (s *Service) markTokenRequestUnknown(ctx context.Context, id, errorCode string, fallback domain.ProvisioningSession) (domain.ProvisioningSession, error) {
+	persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	claim, err := s.repo.MarkTokenRequestUnknown(persistCtx, id, errorCode, s.now())
 	if err != nil {
-		return s.fail(ctx, current, "TOKEN_REQUEST_FAILED", err)
+		return fallback, domain.ErrTokenRequestOutcomeUnknown
 	}
-	if ref == "" {
-		return s.fail(ctx, current, "TOKEN_REFERENCE_EMPTY", ErrTokenNotReceived)
+	if claim.Operation.Status == domain.TokenRequestSucceeded && claim.Session.State != domain.StateTokenRequesting {
+		return claim.Session, nil
 	}
-	current.TokenReference = ref
-	current.State = domain.StateTokenRequested
-	return s.save(ctx, current, "TOKEN_REQUESTED")
+	s.record(persistCtx, audit.Event{SessionID: id, Type: "TOKEN_REQUEST_OUTCOME_UNKNOWN", Result: "UNKNOWN", Reason: errorCode, At: s.now()})
+	return claim.Session, domain.ErrTokenRequestOutcomeUnknown
 }
 func (s *Service) ReceiveToken(ctx context.Context, event TokenWebhook) (domain.ProvisioningSession, error) {
 	if event.SessionID == "" || event.TokenReference == "" || strings.TrimSpace(event.EventID) == "" || event.EventID != strings.TrimSpace(event.EventID) || len(event.EventID) > 256 || strings.ContainsAny(event.EventID, "\x00\r\n") {
@@ -180,7 +224,10 @@ func (s *Service) ReceiveToken(ctx context.Context, event TokenWebhook) (domain.
 	if err != nil {
 		return current, err
 	}
-	if current.TokenReference == event.TokenReference && (current.State == domain.StateTokenRequested || current.State == domain.StateTokenReceived || current.State == domain.StatePayloadWrapped || current.State == domain.StateTransferStarted || current.State == domain.StateTransferred || current.State == domain.StateDeviceVerified || current.State == domain.StateCompleted) {
+	if (current.State == domain.StateTokenRequested || current.State == domain.StateTokenRequesting) && current.Expired(s.now()) {
+		return current, domain.ErrSessionExpired
+	}
+	if current.State == domain.StateTokenRequesting || (current.TokenReference == event.TokenReference && (current.State == domain.StateTokenRequested || current.State == domain.StateTokenReceived || current.State == domain.StatePayloadWrapped || current.State == domain.StateTransferStarted || current.State == domain.StateTransferred || current.State == domain.StateDeviceVerified || current.State == domain.StateCompleted)) {
 		updated, changed, receiveErr := s.repo.ReceiveTokenWebhook(ctx, domain.TokenWebhookEvent{EventID: event.EventID, SessionID: event.SessionID, TokenReference: event.TokenReference}, s.now())
 		if receiveErr == nil && changed {
 			s.record(ctx, audit.Event{SessionID: event.SessionID, Type: "TOKEN_RECEIVED", Result: "SUCCESS", At: s.now()})
@@ -200,6 +247,9 @@ func (s *Service) WrapPayload(ctx context.Context, id string) (domain.Provisioni
 	if err != nil {
 		return current, err
 	}
+	if current.Expired(s.now()) {
+		return current, domain.ErrSessionExpired
+	}
 	if err := requireState(current, domain.StateTokenReceived); err != nil {
 		return current, err
 	}
@@ -209,6 +259,9 @@ func (s *Service) WrapPayload(ctx context.Context, id string) (domain.Provisioni
 	}
 	if wrapped == "" {
 		return s.fail(ctx, current, "WRAPPED_PAYLOAD_EMPTY", ErrInvalidStageInput)
+	}
+	if current.Expired(s.now()) {
+		return current, domain.ErrSessionExpired
 	}
 	current.WrappedPayload = wrapped
 	current.State = domain.StatePayloadWrapped
@@ -222,6 +275,9 @@ func (s *Service) TransferAPDU(ctx context.Context, id string) (domain.Provision
 	if err != nil {
 		return current, err
 	}
+	if current.Expired(s.now()) {
+		return current, domain.ErrSessionExpired
+	}
 	if err := requireState(current, domain.StatePayloadWrapped); err != nil {
 		return current, err
 	}
@@ -232,6 +288,9 @@ func (s *Service) TransferAPDU(ctx context.Context, id string) (domain.Provision
 	}
 	if err := s.transfer.Transfer(ctx, current, current.WrappedPayload); err != nil {
 		return s.fail(ctx, current, "APDU_TRANSFER_FAILED", err)
+	}
+	if current.Expired(s.now()) {
+		return current, domain.ErrSessionExpired
 	}
 	current.State = domain.StateTransferred
 	return s.save(ctx, current, "APDU_TRANSFERRED")
@@ -258,8 +317,13 @@ func (s *Service) Fail(ctx context.Context, id, code string) (domain.Provisionin
 	if err != nil {
 		return current, err
 	}
+	if current.Expired(s.now()) {
+		return current, domain.ErrSessionExpired
+	}
+	if err := current.Transition(domain.StateFailed); err != nil {
+		return current, err
+	}
 	current.FailureCode = code
-	current.State = domain.StateFailed
 	return s.save(ctx, current, "PROVISIONING_FAILED")
 }
 func (s *Service) callAndTransition(ctx context.Context, id string, expected, next domain.ProvisioningState, call func(domain.ProvisioningSession) error) (domain.ProvisioningSession, error) {
@@ -271,10 +335,13 @@ func (s *Service) callAndTransition(ctx context.Context, id string, expected, ne
 		return current, err
 	}
 	if current.Expired(s.now()) {
-		return current, errors.New("session expired")
+		return current, domain.ErrSessionExpired
 	}
 	if err := call(current); err != nil {
 		return s.fail(ctx, current, "STAGE_VERIFICATION_FAILED", err)
+	}
+	if current.Expired(s.now()) {
+		return current, domain.ErrSessionExpired
 	}
 	current.State = next
 	return s.save(ctx, current, string(next))
@@ -285,7 +352,7 @@ func (s *Service) transition(ctx context.Context, id string, next domain.Provisi
 		return current, err
 	}
 	if current.Expired(s.now()) {
-		return current, errors.New("session expired")
+		return current, domain.ErrSessionExpired
 	}
 	if err := current.Transition(next); err != nil {
 		return current, err
@@ -307,8 +374,13 @@ func (s *Service) save(ctx context.Context, current domain.ProvisioningSession, 
 	return updated, nil
 }
 func (s *Service) fail(ctx context.Context, current domain.ProvisioningSession, code string, cause error) (domain.ProvisioningSession, error) {
+	if current.Expired(s.now()) {
+		return current, domain.ErrSessionExpired
+	}
+	if err := current.Transition(domain.StateFailed); err != nil {
+		return current, err
+	}
 	current.FailureCode = code
-	current.State = domain.StateFailed
 	_, saveErr := s.repo.Save(ctx, current)
 	s.record(ctx, audit.Event{SessionID: current.ID, Type: "PROVISIONING_FAILED", Result: "FAILURE", Reason: code, At: s.now()})
 	if saveErr != nil {

@@ -5,42 +5,44 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type Config struct {
-	HTTPAddr                   string
-	Environment                string
-	LogLevel                   string
-	DatabaseURL                string
-	AutoMigrate                bool
-	RedisURL                   string
-	InterswitchTokenURL        string
-	InterswitchRequestURL      string
-	InterswitchClientID        string
-	InterswitchClientSecret    string
-	InterswitchWebhookSecret   string
-	OTELServiceName            string
-	OTELEnvironment            string
-	OTELTracesEndpoint         string
-	SecurityAlertWebhookURL    string
-	SecurityAlertWebhookSecret string
-	SupabaseAuthIssuer         string
-	SupabaseAuthAudience       string
-	AttestationProvider        string
-	GooglePlayPackageName      string
-	GooglePlayCredentials      string
-	GooglePlayCredentialsFile  string
-	GooglePlayRequireLicensed  bool
-	AWSRegion                  string
-	AWSKMSKeyID                string
-	AWSKMSSigningAlgorithm     string
-	AppleTeamID                string
-	AppleBundleID              string
-	AppleEnvironment           string
-	AppleRootCertificateFile   string
-	MaxRequestBodyBytes        int64
-	ShutdownTimeout            time.Duration
+	HTTPAddr                           string
+	Environment                        string
+	LogLevel                           string
+	DatabaseURL                        string
+	AutoMigrate                        bool
+	RedisURL                           string
+	InterswitchTokenURL                string
+	InterswitchRequestURL              string
+	InterswitchClientID                string
+	InterswitchClientSecret            string
+	InterswitchWebhookSecret           string
+	InterswitchIdempotencyKeySupported bool
+	OTELServiceName                    string
+	OTELEnvironment                    string
+	OTELTracesEndpoint                 string
+	SecurityAlertWebhookURL            string
+	SecurityAlertWebhookSecret         string
+	SupabaseAuthIssuer                 string
+	SupabaseAuthAudience               string
+	AttestationProvider                string
+	GooglePlayPackageName              string
+	GooglePlayCredentials              string
+	GooglePlayCredentialsFile          string
+	GooglePlayRequireLicensed          bool
+	AWSRegion                          string
+	AWSKMSKeyID                        string
+	AWSKMSSigningAlgorithm             string
+	AppleTeamID                        string
+	AppleBundleID                      string
+	AppleEnvironment                   string
+	AppleRootCertificateFile           string
+	MaxRequestBodyBytes                int64
+	ShutdownTimeout                    time.Duration
 }
 
 func Load() (Config, error) {
@@ -56,11 +58,15 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, errors.New("AUTO_MIGRATE must be true or false")
 	}
+	interswitchIdempotencySupported, err := strconv.ParseBool(getenv("INTERSWITCH_SUPPORTS_IDEMPOTENCY_KEY", "false"))
+	if err != nil {
+		return Config{}, errors.New("INTERSWITCH_SUPPORTS_IDEMPOTENCY_KEY must be true or false")
+	}
 	provider := getenv("ATTESTATION_PROVIDER", "")
 	if provider == "" && os.Getenv("AWS_KMS_KEY_ID") != "" {
 		provider = "aws-kms"
 	}
-	cfg := Config{HTTPAddr: getenv("HTTP_ADDR", ":8080"), Environment: getenv("ENVIRONMENT", "development"), LogLevel: getenv("LOG_LEVEL", "info"), DatabaseURL: os.Getenv("DATABASE_URL"), AutoMigrate: autoMigrate, RedisURL: os.Getenv("REDIS_URL"), InterswitchTokenURL: os.Getenv("INTERSWITCH_TOKEN_URL"), InterswitchRequestURL: os.Getenv("INTERSWITCH_REQUEST_URL"), InterswitchClientID: os.Getenv("INTERSWITCH_CLIENT_ID"), InterswitchClientSecret: os.Getenv("INTERSWITCH_CLIENT_SECRET"), InterswitchWebhookSecret: os.Getenv("INTERSWITCH_WEBHOOK_SECRET"), OTELServiceName: getenv("OTEL_SERVICE_NAME", "provisioning-api"), OTELEnvironment: getenv("OTEL_RESOURCE_ATTRIBUTES_ENVIRONMENT", getenv("ENVIRONMENT", "development")), OTELTracesEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"), SecurityAlertWebhookURL: os.Getenv("SECURITY_ALERT_WEBHOOK_URL"), SecurityAlertWebhookSecret: os.Getenv("SECURITY_ALERT_WEBHOOK_SECRET"), SupabaseAuthIssuer: getenv("SUPABASE_AUTH_ISSUER", "https://haytetewtgbfxnolrhjz.supabase.co/auth/v1"), SupabaseAuthAudience: getenv("SUPABASE_AUTH_AUDIENCE", "authenticated"), AttestationProvider: provider, GooglePlayPackageName: os.Getenv("GOOGLE_PLAY_INTEGRITY_PACKAGE_NAME"), GooglePlayCredentials: os.Getenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_JSON"), GooglePlayCredentialsFile: os.Getenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_FILE"), GooglePlayRequireLicensed: getenv("GOOGLE_PLAY_INTEGRITY_REQUIRE_LICENSED", "true") == "true", AWSRegion: getenv("AWS_REGION", "eu-north-1"), AWSKMSKeyID: os.Getenv("AWS_KMS_KEY_ID"), AWSKMSSigningAlgorithm: getenv("AWS_KMS_SIGNING_ALGORITHM", "RSASSA_PKCS1_V1_5_SHA_256"), AppleTeamID: os.Getenv("APPLE_TEAM_ID"), AppleBundleID: os.Getenv("APPLE_BUNDLE_ID"), AppleEnvironment: getenv("APPLE_APP_ATTEST_ENVIRONMENT", "production"), AppleRootCertificateFile: os.Getenv("APPLE_APP_ATTEST_ROOT_CERT_FILE"), MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second}
+	cfg := Config{HTTPAddr: getenv("HTTP_ADDR", ":8080"), Environment: getenv("ENVIRONMENT", "development"), LogLevel: getenv("LOG_LEVEL", "info"), DatabaseURL: os.Getenv("DATABASE_URL"), AutoMigrate: autoMigrate, RedisURL: os.Getenv("REDIS_URL"), InterswitchTokenURL: os.Getenv("INTERSWITCH_TOKEN_URL"), InterswitchRequestURL: os.Getenv("INTERSWITCH_REQUEST_URL"), InterswitchClientID: os.Getenv("INTERSWITCH_CLIENT_ID"), InterswitchClientSecret: os.Getenv("INTERSWITCH_CLIENT_SECRET"), InterswitchWebhookSecret: os.Getenv("INTERSWITCH_WEBHOOK_SECRET"), InterswitchIdempotencyKeySupported: interswitchIdempotencySupported, OTELServiceName: getenv("OTEL_SERVICE_NAME", "provisioning-api"), OTELEnvironment: getenv("OTEL_RESOURCE_ATTRIBUTES_ENVIRONMENT", getenv("ENVIRONMENT", "development")), OTELTracesEndpoint: os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"), SecurityAlertWebhookURL: os.Getenv("SECURITY_ALERT_WEBHOOK_URL"), SecurityAlertWebhookSecret: os.Getenv("SECURITY_ALERT_WEBHOOK_SECRET"), SupabaseAuthIssuer: getenv("SUPABASE_AUTH_ISSUER", "https://haytetewtgbfxnolrhjz.supabase.co/auth/v1"), SupabaseAuthAudience: getenv("SUPABASE_AUTH_AUDIENCE", "authenticated"), AttestationProvider: provider, GooglePlayPackageName: os.Getenv("GOOGLE_PLAY_INTEGRITY_PACKAGE_NAME"), GooglePlayCredentials: os.Getenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_JSON"), GooglePlayCredentialsFile: os.Getenv("GOOGLE_PLAY_INTEGRITY_CREDENTIALS_FILE"), GooglePlayRequireLicensed: getenv("GOOGLE_PLAY_INTEGRITY_REQUIRE_LICENSED", "true") == "true", AWSRegion: getenv("AWS_REGION", "eu-north-1"), AWSKMSKeyID: os.Getenv("AWS_KMS_KEY_ID"), AWSKMSSigningAlgorithm: getenv("AWS_KMS_SIGNING_ALGORITHM", "RSASSA_PKCS1_V1_5_SHA_256"), AppleTeamID: os.Getenv("APPLE_TEAM_ID"), AppleBundleID: os.Getenv("APPLE_BUNDLE_ID"), AppleEnvironment: getenv("APPLE_APP_ATTEST_ENVIRONMENT", "production"), AppleRootCertificateFile: os.Getenv("APPLE_APP_ATTEST_ROOT_CERT_FILE"), MaxRequestBodyBytes: maxBody, ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second}
 	if cfg.HTTPAddr == "" {
 		return Config{}, errors.New("HTTP_ADDR must not be empty")
 	}
@@ -75,13 +81,26 @@ func Load() (Config, error) {
 			return Config{}, errors.New("DATABASE_URL is required when AUTO_MIGRATE=true")
 		}
 	}
-	if (cfg.Environment == "staging" || cfg.Environment == "production") && cfg.DatabaseURL == "" {
+	if (cfg.Environment == "staging" || cfg.Environment == "production") && isBlank(cfg.DatabaseURL) {
 		return Config{}, errors.New("DATABASE_URL is required for staging and production")
 	}
-	if (cfg.Environment == "staging" || cfg.Environment == "production") && cfg.RedisURL == "" {
+	if cfg.DatabaseURL != "" {
+		parsed, parseErr := url.Parse(cfg.DatabaseURL)
+		productionLike := cfg.Environment == "staging" || cfg.Environment == "production"
+		if parseErr != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || (productionLike && parsed.Host == "") {
+			return Config{}, errors.New("DATABASE_URL must be a PostgreSQL URI; staging and production require a host")
+		}
+	}
+	if (cfg.Environment == "staging" || cfg.Environment == "production") && isBlank(cfg.RedisURL) {
 		return Config{}, errors.New("REDIS_URL is required for staging and production rate limiting")
 	}
-	if (cfg.Environment == "staging" || cfg.Environment == "production") && (cfg.InterswitchTokenURL == "" || cfg.InterswitchRequestURL == "" || cfg.InterswitchClientID == "" || cfg.InterswitchClientSecret == "" || cfg.InterswitchWebhookSecret == "") {
+	if cfg.RedisURL != "" {
+		parsed, parseErr := url.Parse(cfg.RedisURL)
+		if parseErr != nil || (parsed.Scheme != "redis" && parsed.Scheme != "rediss") || parsed.Host == "" {
+			return Config{}, errors.New("REDIS_URL must be an absolute redis:// or rediss:// URI with a host")
+		}
+	}
+	if (cfg.Environment == "staging" || cfg.Environment == "production") && (isBlank(cfg.InterswitchTokenURL) || isBlank(cfg.InterswitchRequestURL) || isBlank(cfg.InterswitchClientID) || isBlank(cfg.InterswitchClientSecret) || isBlank(cfg.InterswitchWebhookSecret)) {
 		return Config{}, errors.New("INTERSWITCH_TOKEN_URL, INTERSWITCH_REQUEST_URL, INTERSWITCH_CLIENT_ID, INTERSWITCH_CLIENT_SECRET, and INTERSWITCH_WEBHOOK_SECRET are required for staging and production")
 	}
 	if cfg.InterswitchTokenURL != "" || cfg.InterswitchRequestURL != "" {
@@ -124,6 +143,9 @@ func getenv(key, fallback string) string {
 	}
 	return fallback
 }
+
+func isBlank(value string) bool { return strings.TrimSpace(value) == "" }
+
 func int64Env(key string, fallback int64) (int64, error) {
 	v := getenv(key, strconv.FormatInt(fallback, 10))
 	return strconv.ParseInt(v, 10, 64)

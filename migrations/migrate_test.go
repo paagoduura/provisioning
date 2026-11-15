@@ -11,6 +11,8 @@ func TestMigrationVersion(t *testing.T) {
 		{name: "001_init.sql", want: 1},
 		{name: "013_provisioning_stage_metadata.sql", want: 13},
 		{name: "014_interswitch_webhook_events.sql", want: 14},
+		{name: "015_durable_token_request_operations.sql", want: 15},
+		{name: "016_backfill_migration_ledger.sql", want: 16},
 		{name: "1_init.sql", bad: true},
 		{name: "000_init.sql", bad: true},
 		{name: "abc_init.sql", bad: true},

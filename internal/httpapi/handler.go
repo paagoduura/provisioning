@@ -386,10 +386,16 @@ func (h *Handler) interswitchWebhook(w http.ResponseWriter, r *http.Request) {
 
 func writeProvisioningStageError(w http.ResponseWriter, err error) {
 	status := http.StatusBadRequest
+	if errors.Is(err, domain.ErrSessionExpired) {
+		status = http.StatusGone
+	}
 	if errors.Is(err, service.ErrStageUnavailable) {
 		status = http.StatusNotImplemented
 	}
 	if errors.Is(err, domain.ErrConcurrentUpdate) {
+		status = http.StatusConflict
+	}
+	if errors.Is(err, domain.ErrTokenRequestInProgress) || errors.Is(err, domain.ErrTokenRequestOutcomeUnknown) {
 		status = http.StatusConflict
 	}
 	if errors.Is(err, domain.ErrSessionNotFound) {
@@ -400,7 +406,13 @@ func writeProvisioningStageError(w http.ResponseWriter, err error) {
 
 func writeDomainError(w http.ResponseWriter, err error) {
 	status := http.StatusBadRequest
+	if errors.Is(err, domain.ErrSessionExpired) {
+		status = http.StatusGone
+	}
 	if errors.Is(err, domain.ErrConcurrentUpdate) {
+		status = http.StatusConflict
+	}
+	if errors.Is(err, domain.ErrTokenRequestInProgress) || errors.Is(err, domain.ErrTokenRequestOutcomeUnknown) {
 		status = http.StatusConflict
 	}
 	if errors.Is(err, attestation.ErrUnsupportedProvider) {

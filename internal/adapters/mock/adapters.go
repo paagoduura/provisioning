@@ -23,7 +23,7 @@ func (CryptoService) VerifyDeviceResponse(ctx context.Context, deviceUID, challe
 
 type InterswitchAdapter struct{}
 
-func (InterswitchAdapter) RequestToken(ctx context.Context, sessionID string) (string, error) {
+func (InterswitchAdapter) RequestToken(ctx context.Context, sessionID, _ string) (string, error) {
 	h := sha256.Sum256([]byte("dev-token:" + sessionID))
 	return "dev-token-ref-" + hex.EncodeToString(h[:8]), nil
 }

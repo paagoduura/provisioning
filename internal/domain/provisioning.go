@@ -13,6 +13,7 @@ const (
 	StateDeviceDiscovered     ProvisioningState = "DEVICE_DISCOVERED"
 	StateDeviceAttested       ProvisioningState = "DEVICE_ATTESTED"
 	StateSessionAuthenticated ProvisioningState = "SESSION_AUTHENTICATED"
+	StateTokenRequesting      ProvisioningState = "TOKEN_REQUESTING"
 	StateTokenRequested       ProvisioningState = "TOKEN_REQUESTED"
 	StateTokenReceived        ProvisioningState = "TOKEN_RECEIVED"
 	StatePayloadWrapped       ProvisioningState = "PAYLOAD_WRAPPED"
@@ -25,8 +26,12 @@ const (
 
 var ErrInvalidTransition = errors.New("invalid provisioning state transition")
 var ErrSessionNotFound = errors.New("session not found")
+var ErrSessionExpired = errors.New("provisioning session has expired")
 var ErrConcurrentUpdate = errors.New("provisioning session was concurrently updated")
 var ErrWebhookEventConflict = errors.New("webhook event identifier was reused with different content")
+var ErrTokenRequestInProgress = errors.New("token request is already in progress")
+var ErrTokenRequestOutcomeUnknown = errors.New("token request outcome is unknown and requires reconciliation")
+var ErrTokenRequestConflict = errors.New("token request provider reference conflicts with the recorded operation")
 
 // TokenWebhookEvent is the verified, provider-originated event used to advance
 // a session. Repositories persist its identity atomically with the transition.
@@ -36,11 +41,42 @@ type TokenWebhookEvent struct {
 	TokenReference string
 }
 
+type TokenRequestStatus string
+
+const (
+	TokenRequestPending   TokenRequestStatus = "PENDING"
+	TokenRequestUnknown   TokenRequestStatus = "UNKNOWN"
+	TokenRequestSucceeded TokenRequestStatus = "SUCCEEDED"
+)
+
+// TokenRequestOperation is the durable record for one provider side effect.
+// IdempotencyKey is stable for the life of the provisioning session.
+type TokenRequestOperation struct {
+	SessionID         string
+	IdempotencyKey    string
+	Status            TokenRequestStatus
+	ProviderReference string
+	LastErrorCode     string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type TokenRequestClaim struct {
+	Session   ProvisioningSession
+	Operation TokenRequestOperation
+	Claimed   bool
+}
+
+func TokenRequestIdempotencyKey(sessionID string) string {
+	return "provisioning-token-v1:" + sessionID
+}
+
 var transitions = map[ProvisioningState]map[ProvisioningState]bool{
 	StateCreated:              {StateDeviceDiscovered: true, StateFailed: true},
 	StateDeviceDiscovered:     {StateDeviceAttested: true, StateFailed: true},
 	StateDeviceAttested:       {StateSessionAuthenticated: true, StateFailed: true},
-	StateSessionAuthenticated: {StateTokenRequested: true, StateFailed: true},
+	StateSessionAuthenticated: {StateTokenRequesting: true, StateFailed: true},
+	StateTokenRequesting:      {StateTokenRequested: true, StateTokenReceived: true},
 	StateTokenRequested:       {StateTokenReceived: true, StateFailed: true},
 	StateTokenReceived:        {StatePayloadWrapped: true, StateFailed: true},
 	StatePayloadWrapped:       {StateTransferStarted: true, StateFailed: true},
