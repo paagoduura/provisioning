@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/paagoduura/provisioning/internal/attestation"
 	"github.com/paagoduura/provisioning/internal/domain"
@@ -128,6 +129,10 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 	}
 	result, existing, err := h.provisioning.Create(r.Context(), service.CreateInput{UserID: userID, DeviceUID: req.DeviceUID, DeviceModel: req.DeviceModel, Transport: req.Transport}, r.Header.Get("Idempotency-Key"))
 	if err != nil {
+		if errors.Is(err, domain.ErrIdempotencyConflict) {
+			writeError(w, http.StatusConflict, "idempotency key conflicts with an existing request")
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -347,6 +352,81 @@ func (h *Handler) sessionAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusOK, result)
+	case "authenticate":
+		var req stageProofRequest
+		if !h.decodeStageProof(w, r, &req) {
+			return
+		}
+		result, err := h.provisioning.Authenticate(r.Context(), sessionID, req.Proof)
+		if err != nil {
+			writeProvisioningStageError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	case "token-request":
+		if !requireEmptyActionBody(w, r) {
+			return
+		}
+		result, err := h.provisioning.RequestToken(r.Context(), sessionID)
+		if err != nil {
+			writeProvisioningStageError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	case "wrap-payload":
+		if !requireEmptyActionBody(w, r) {
+			return
+		}
+		result, err := h.provisioning.WrapPayload(r.Context(), sessionID)
+		if err != nil {
+			writeProvisioningStageError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	case "transfer-apdu":
+		if !requireEmptyActionBody(w, r) {
+			return
+		}
+		result, err := h.provisioning.TransferAPDU(r.Context(), sessionID)
+		if err != nil {
+			writeProvisioningStageError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	case "verify-device":
+		var req stageProofRequest
+		if !h.decodeStageProof(w, r, &req) {
+			return
+		}
+		result, err := h.provisioning.VerifyDevice(r.Context(), sessionID, req.Proof)
+		if err != nil {
+			writeProvisioningStageError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	case "complete":
+		if !requireEmptyActionBody(w, r) {
+			return
+		}
+		result, err := h.provisioning.Complete(r.Context(), sessionID)
+		if err != nil {
+			writeProvisioningStageError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
+	case "fail":
+		defer r.Body.Close()
+		var req failureRequest
+		if err := decodeRequest(r.Body, &req); err != nil || !validFailureCode(req.Code) {
+			writeError(w, http.StatusBadRequest, "failure_code must be a stable uppercase code")
+			return
+		}
+		result, err := h.provisioning.Fail(r.Context(), sessionID, req.Code)
+		if err != nil {
+			writeProvisioningStageError(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, result)
 	default:
 		writeError(w, http.StatusNotFound, "unknown session action")
 	}
@@ -356,7 +436,40 @@ type stageProofRequest struct {
 	Proof string `json:"proof"`
 }
 type failureRequest struct {
-	Code string `json:"code"`
+	Code string `json:"failure_code"`
+}
+
+const maxStageProofLength = 64 << 10
+
+func (h *Handler) decodeStageProof(w http.ResponseWriter, r *http.Request, req *stageProofRequest) bool {
+	defer r.Body.Close()
+	if err := decodeRequest(r.Body, req); err != nil || strings.TrimSpace(req.Proof) == "" || utf8.RuneCountInString(req.Proof) > maxStageProofLength {
+		writeError(w, http.StatusBadRequest, "proof must be a non-empty opaque value within the size limit")
+		return false
+	}
+	return true
+}
+
+func requireEmptyActionBody(w http.ResponseWriter, r *http.Request) bool {
+	defer r.Body.Close()
+	var unexpected json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&unexpected); err != io.EOF {
+		writeError(w, http.StatusBadRequest, "this action does not accept a request body")
+		return false
+	}
+	return true
+}
+
+func validFailureCode(value string) bool {
+	if len(value) == 0 || len(value) > 64 {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && r != '_' {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *Handler) interswitchWebhook(w http.ResponseWriter, r *http.Request) {
@@ -385,23 +498,24 @@ func (h *Handler) interswitchWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeProvisioningStageError(w http.ResponseWriter, err error) {
-	status := http.StatusBadRequest
-	if errors.Is(err, domain.ErrSessionExpired) {
-		status = http.StatusGone
+	status, code := http.StatusUnprocessableEntity, "STAGE_OPERATION_FAILED"
+	switch {
+	case errors.Is(err, domain.ErrSessionExpired):
+		status, code = http.StatusGone, "SESSION_EXPIRED"
+	case errors.Is(err, service.ErrStageUnavailable):
+		status, code = http.StatusNotImplemented, "STAGE_UNAVAILABLE"
+	case errors.Is(err, domain.ErrSessionNotFound):
+		status, code = http.StatusNotFound, "SESSION_NOT_FOUND"
+	case errors.Is(err, domain.ErrTokenRequestOutcomeUnknown):
+		status, code = http.StatusConflict, "TOKEN_REQUEST_REQUIRES_RECONCILIATION"
+	case errors.Is(err, domain.ErrTokenRequestInProgress):
+		status, code = http.StatusConflict, "TOKEN_REQUEST_IN_PROGRESS"
+	case errors.Is(err, domain.ErrConcurrentUpdate), errors.Is(err, domain.ErrInvalidTransition), errors.Is(err, domain.ErrTokenRequestConflict), errors.Is(err, domain.ErrWebhookEventConflict):
+		status, code = http.StatusConflict, "STATE_CONFLICT"
+	case errors.Is(err, service.ErrInvalidStageInput):
+		status, code = http.StatusBadRequest, "INVALID_STAGE_REQUEST"
 	}
-	if errors.Is(err, service.ErrStageUnavailable) {
-		status = http.StatusNotImplemented
-	}
-	if errors.Is(err, domain.ErrConcurrentUpdate) {
-		status = http.StatusConflict
-	}
-	if errors.Is(err, domain.ErrTokenRequestInProgress) || errors.Is(err, domain.ErrTokenRequestOutcomeUnknown) {
-		status = http.StatusConflict
-	}
-	if errors.Is(err, domain.ErrSessionNotFound) {
-		status = http.StatusNotFound
-	}
-	writeJSON(w, status, map[string]string{"error": "provisioning stage failed", "detail": err.Error()})
+	writeJSON(w, status, map[string]string{"error": "provisioning stage failed", "failure_code": code})
 }
 
 func writeDomainError(w http.ResponseWriter, err error) {

@@ -26,7 +26,7 @@ func (r *SessionRepository) Create(ctx context.Context, s domain.ProvisioningSes
 	if version == 0 {
 		version = 1
 	}
-	err := r.pool.QueryRow(ctx, `INSERT INTO provisioning_sessions (id, idempotency_key, user_id, device_id, device_uid_hash, device_model, transport, state, version, correlation_id, created_at, expires_at, failure_code, token_reference, wrapped_payload, apdu_receipt) VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, ''), NULLIF($14, ''), NULLIF($15, ''), NULLIF($16, '')) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`, s.ID, s.IdempotencyKey, s.UserID, s.DeviceID, hashDeviceUID(s.DeviceUID), s.DeviceModel, s.Transport, s.State, version, s.Correlation, s.CreatedAt, s.ExpiresAt, s.FailureCode, s.TokenReference, s.WrappedPayload, s.APDUReceipt).Scan(&insertedID)
+	err := r.pool.QueryRow(ctx, `INSERT INTO provisioning_sessions (id, idempotency_key, user_id, device_id, device_uid_hash, device_model, transport, state, version, correlation_id, created_at, expires_at, failure_code, token_reference, wrapped_payload, apdu_receipt, request_fingerprint) VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, $9, $10, $11, $12, NULLIF($13, ''), NULLIF($14, ''), NULLIF($15, ''), NULLIF($16, ''), NULLIF($17, ''::bytea)) ON CONFLICT (idempotency_key) DO NOTHING RETURNING id`, s.ID, s.IdempotencyKey, s.UserID, s.DeviceID, hashDeviceUID(s.DeviceUID), s.DeviceModel, s.Transport, s.State, version, s.Correlation, s.CreatedAt, s.ExpiresAt, s.FailureCode, s.TokenReference, s.WrappedPayload, s.APDUReceipt, s.RequestFingerprint).Scan(&insertedID)
 	if err == nil {
 		s.Version = version
 		return s, true, nil
@@ -36,6 +36,9 @@ func (r *SessionRepository) Create(ctx context.Context, s domain.ProvisioningSes
 		if findErr != nil {
 			return domain.ProvisioningSession{}, false, fmt.Errorf("find concurrent idempotent session: %w", findErr)
 		}
+		if !domain.IdempotencyFingerprintsMatch(existing.RequestFingerprint, s.RequestFingerprint) {
+			return domain.ProvisioningSession{}, false, domain.ErrIdempotencyConflict
+		}
 		return existing, false, nil
 	}
 	return domain.ProvisioningSession{}, false, fmt.Errorf("create session: %w", err)
@@ -44,7 +47,7 @@ func (r *SessionRepository) Create(ctx context.Context, s domain.ProvisioningSes
 func (r *SessionRepository) Get(ctx context.Context, id string) (domain.ProvisioningSession, error) {
 	var s domain.ProvisioningSession
 	var deviceHash []byte
-	err := r.pool.QueryRow(ctx, `SELECT id, idempotency_key, user_id, COALESCE(device_id, ''), device_uid_hash, device_model, transport, state, version, correlation_id, created_at, expires_at, COALESCE(failure_code, ''), COALESCE(token_reference, ''), COALESCE(wrapped_payload, ''), COALESCE(apdu_receipt, '') FROM provisioning_sessions WHERE id = $1`, id).Scan(&s.ID, &s.IdempotencyKey, &s.UserID, &s.DeviceID, &deviceHash, &s.DeviceModel, &s.Transport, &s.State, &s.Version, &s.Correlation, &s.CreatedAt, &s.ExpiresAt, &s.FailureCode, &s.TokenReference, &s.WrappedPayload, &s.APDUReceipt)
+	err := r.pool.QueryRow(ctx, `SELECT id, idempotency_key, user_id, COALESCE(device_id, ''), device_uid_hash, device_model, transport, state, version, correlation_id, created_at, expires_at, COALESCE(failure_code, ''), COALESCE(token_reference, ''), COALESCE(wrapped_payload, ''), COALESCE(apdu_receipt, ''), COALESCE(request_fingerprint, ''::bytea) FROM provisioning_sessions WHERE id = $1`, id).Scan(&s.ID, &s.IdempotencyKey, &s.UserID, &s.DeviceID, &deviceHash, &s.DeviceModel, &s.Transport, &s.State, &s.Version, &s.Correlation, &s.CreatedAt, &s.ExpiresAt, &s.FailureCode, &s.TokenReference, &s.WrappedPayload, &s.APDUReceipt, &s.RequestFingerprint)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ProvisioningSession{}, ErrNotFound
 	}
@@ -102,7 +105,7 @@ func (r *SessionRepository) ReceiveTokenWebhook(ctx context.Context, event domai
 		if existingSessionID != event.SessionID || !equalHash(existingHash, payloadHash[:]) {
 			return domain.ProvisioningSession{}, false, domain.ErrWebhookEventConflict
 		}
-		session, err := scanSession(tx.QueryRow(ctx, `SELECT id, idempotency_key, user_id, COALESCE(device_id, ''), device_uid_hash, device_model, transport, state, version, correlation_id, created_at, expires_at, COALESCE(failure_code, ''), COALESCE(token_reference, ''), COALESCE(wrapped_payload, ''), COALESCE(apdu_receipt, '') FROM provisioning_sessions WHERE id = $1`, event.SessionID))
+		session, err := scanSession(tx.QueryRow(ctx, `SELECT id, idempotency_key, user_id, COALESCE(device_id, ''), device_uid_hash, device_model, transport, state, version, correlation_id, created_at, expires_at, COALESCE(failure_code, ''), COALESCE(token_reference, ''), COALESCE(wrapped_payload, ''), COALESCE(apdu_receipt, ''), COALESCE(request_fingerprint, ''::bytea) FROM provisioning_sessions WHERE id = $1`, event.SessionID))
 		if err != nil {
 			return domain.ProvisioningSession{}, false, fmt.Errorf("read duplicate webhook session: %w", err)
 		}
@@ -117,7 +120,7 @@ func (r *SessionRepository) ReceiveTokenWebhook(ctx context.Context, event domai
 
 	var session domain.ProvisioningSession
 	var deviceHash []byte
-	err = tx.QueryRow(ctx, `SELECT id, idempotency_key, user_id, COALESCE(device_id, ''), device_uid_hash, device_model, transport, state, version, correlation_id, created_at, expires_at, COALESCE(failure_code, ''), COALESCE(token_reference, ''), COALESCE(wrapped_payload, ''), COALESCE(apdu_receipt, '') FROM provisioning_sessions WHERE id = $1 FOR UPDATE`, event.SessionID).Scan(&session.ID, &session.IdempotencyKey, &session.UserID, &session.DeviceID, &deviceHash, &session.DeviceModel, &session.Transport, &session.State, &session.Version, &session.Correlation, &session.CreatedAt, &session.ExpiresAt, &session.FailureCode, &session.TokenReference, &session.WrappedPayload, &session.APDUReceipt)
+	err = tx.QueryRow(ctx, `SELECT id, idempotency_key, user_id, COALESCE(device_id, ''), device_uid_hash, device_model, transport, state, version, correlation_id, created_at, expires_at, COALESCE(failure_code, ''), COALESCE(token_reference, ''), COALESCE(wrapped_payload, ''), COALESCE(apdu_receipt, ''), COALESCE(request_fingerprint, ''::bytea) FROM provisioning_sessions WHERE id = $1 FOR UPDATE`, event.SessionID).Scan(&session.ID, &session.IdempotencyKey, &session.UserID, &session.DeviceID, &deviceHash, &session.DeviceModel, &session.Transport, &session.State, &session.Version, &session.Correlation, &session.CreatedAt, &session.ExpiresAt, &session.FailureCode, &session.TokenReference, &session.WrappedPayload, &session.APDUReceipt, &session.RequestFingerprint)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ProvisioningSession{}, false, ErrNotFound
 	}
@@ -185,7 +188,7 @@ func (r *SessionRepository) ReceiveTokenWebhook(ctx context.Context, event domai
 func scanSession(row pgx.Row) (domain.ProvisioningSession, error) {
 	var session domain.ProvisioningSession
 	var deviceHash []byte
-	err := row.Scan(&session.ID, &session.IdempotencyKey, &session.UserID, &session.DeviceID, &deviceHash, &session.DeviceModel, &session.Transport, &session.State, &session.Version, &session.Correlation, &session.CreatedAt, &session.ExpiresAt, &session.FailureCode, &session.TokenReference, &session.WrappedPayload, &session.APDUReceipt)
+	err := row.Scan(&session.ID, &session.IdempotencyKey, &session.UserID, &session.DeviceID, &deviceHash, &session.DeviceModel, &session.Transport, &session.State, &session.Version, &session.Correlation, &session.CreatedAt, &session.ExpiresAt, &session.FailureCode, &session.TokenReference, &session.WrappedPayload, &session.APDUReceipt, &session.RequestFingerprint)
 	return session, err
 }
 
@@ -210,14 +213,6 @@ func (r *SessionRepository) FindByIdempotencyKey(ctx context.Context, key string
 		return domain.ProvisioningSession{}, fmt.Errorf("find idempotency key: %w", err)
 	}
 	return r.Get(ctx, id)
-}
-
-func (r *SessionRepository) SaveIdempotencyKey(ctx context.Context, key, id string) error {
-	_, err := r.pool.Exec(ctx, `UPDATE provisioning_sessions SET idempotency_key = $1 WHERE id = $2`, key, id)
-	if err != nil {
-		return fmt.Errorf("save idempotency key: %w", err)
-	}
-	return nil
 }
 
 func hashDeviceUID(uid string) []byte { sum := sha256.Sum256([]byte(uid)); return sum[:] }

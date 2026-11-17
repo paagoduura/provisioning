@@ -3,6 +3,7 @@
 !.env.example
 bin/
 dist/
+backups/
 coverage.out
 .idea/
 .vscode/

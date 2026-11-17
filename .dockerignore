@@ -1,0 +1,9 @@
+.git
+.github
+.env
+.env.*
+coverage.out
+bin/
+dist/
+node_modules/
+.DS_Store

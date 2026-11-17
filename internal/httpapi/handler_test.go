@@ -75,6 +75,22 @@ func TestCreateSessionUsesVerifiedSubjectAndRejectsClientIdentity(t *testing.T) 
 	}
 }
 
+func TestCreateSessionRejectsIdempotencyKeyReuseWithDifferentRequest(t *testing.T) {
+	h := newTestHandler(testVerifier{"valid-user-token": "user-123"})
+	createSessionForTest(t, h, "valid-user-token", "fingerprinted-create-key")
+	request := httptest.NewRequest(http.MethodPost, "/v1/provisioning-sessions", strings.NewReader(`{"device_uid":"different-device","device_model":"wearable-v1","transport":"ble"}`))
+	request.Header.Set("Authorization", "Bearer valid-user-token")
+	request.Header.Set("Idempotency-Key", "fingerprinted-create-key")
+	recorder := httptest.NewRecorder()
+	h.Routes().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("same-key changed request returned %d, want 409: %s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "fingerprint") || strings.Contains(recorder.Body.String(), "different-device") {
+		t.Fatalf("conflict response disclosed request fingerprint details: %s", recorder.Body.String())
+	}
+}
+
 func TestSessionReadAndActionsAreOwnerScoped(t *testing.T) {
 	h := newTestHandler(testVerifier{"owner-token": "owner-1", "other-token": "owner-2"})
 	created := createSessionForTest(t, h, "owner-token", "shared-idempotency")

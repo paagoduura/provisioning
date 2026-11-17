@@ -34,6 +34,9 @@ func (r *SessionRepository) Create(ctx context.Context, s domain.ProvisioningSes
 	defer r.mu.Unlock()
 	if id, ok := r.idempotencyKey[s.IdempotencyKey]; ok {
 		if existing, ok := r.sessions[id]; ok {
+			if !domain.IdempotencyFingerprintsMatch(existing.RequestFingerprint, s.RequestFingerprint) {
+				return domain.ProvisioningSession{}, false, domain.ErrIdempotencyConflict
+			}
 			return existing, false, nil
 		}
 	}
@@ -150,11 +153,4 @@ func (r *SessionRepository) FindByIdempotencyKey(ctx context.Context, key string
 		return domain.ProvisioningSession{}, ErrNotFound
 	}
 	return s, nil
-}
-
-func (r *SessionRepository) SaveIdempotencyKey(ctx context.Context, key, id string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.idempotencyKey[key] = id
-	return nil
 }

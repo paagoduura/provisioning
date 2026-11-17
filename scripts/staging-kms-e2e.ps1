@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$ApiBaseUrl = $(if ($env:OTA_API_BASE_URL) { $env:OTA_API_BASE_URL } else { 'http://127.0.0.1:8080' }),
-    [string]$AwsProfile = $(if ($env:AWS_PROFILE) { $env:AWS_PROFILE } else { 'chris-stev' }),
+	[string]$AwsProfile = $env:AWS_PROFILE,
     [string]$AwsRegion = $(if ($env:AWS_REGION) { $env:AWS_REGION } else { 'eu-north-1' }),
     [string]$KmsKeyId = $env:AWS_KMS_KEY_ID,
     [string]$SigningAlgorithm = $(if ($env:AWS_KMS_SIGNING_ALGORITHM) { $env:AWS_KMS_SIGNING_ALGORITHM } else { 'RSASSA_PKCS1_V1_5_SHA_256' })
@@ -100,6 +100,11 @@ if ([string]::IsNullOrWhiteSpace($KmsKeyId)) {
     throw 'AWS_KMS_KEY_ID must be set to the staging asymmetric KMS key ARN or ID.'
 }
 
+$awsGlobalArgs = @('--region', $AwsRegion)
+if (-not [string]::IsNullOrWhiteSpace($AwsProfile)) {
+    $awsGlobalArgs = @('--profile', $AwsProfile) + $awsGlobalArgs
+}
+
 $temporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ('ota-kms-e2e-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $temporaryDirectory | Out-Null
 $messagePath = Join-Path $temporaryDirectory 'canonical-message.bin'
@@ -143,14 +148,14 @@ try {
     Write-Output ("canonical_sha256=" + ([BitConverter]::ToString($canonicalDigest).Replace('-', '').ToLowerInvariant()))
     [IO.File]::WriteAllBytes($messagePath, $canonicalBytes)
 
-    & aws kms sign --profile $AwsProfile --region $AwsRegion --key-id $keyId --message "fileb://$messagePath" --message-type RAW --signing-algorithm $SigningAlgorithm --query Signature --output text | Out-File -Encoding ascii -NoNewline $signaturePath
+    & aws @awsGlobalArgs kms sign --key-id $keyId --message "fileb://$messagePath" --message-type RAW --signing-algorithm $SigningAlgorithm --query Signature --output text | Out-File -Encoding ascii -NoNewline $signaturePath
     if ($LASTEXITCODE -ne 0) { throw 'AWS KMS sign command failed.' }
 
     $signatureB64 = (Get-Content -Raw $signaturePath).Trim()
     if ([string]::IsNullOrWhiteSpace($signatureB64)) { throw 'AWS KMS returned an empty signature.' }
     [IO.File]::WriteAllBytes($signatureBytesPath, [Convert]::FromBase64String($signatureB64))
 
-    $directVerify = & aws kms verify --profile $AwsProfile --region $AwsRegion --key-id $keyId --message "fileb://$messagePath" --message-type RAW --signature "fileb://$signatureBytesPath" --signing-algorithm $SigningAlgorithm --query SignatureValid --output text
+    $directVerify = & aws @awsGlobalArgs kms verify --key-id $keyId --message "fileb://$messagePath" --message-type RAW --signature "fileb://$signatureBytesPath" --signing-algorithm $SigningAlgorithm --query SignatureValid --output text
     if ($LASTEXITCODE -ne 0 -or $directVerify.Trim() -ne 'True') {
         throw "Direct AWS KMS verification failed: $($directVerify.Trim())"
     }
@@ -159,7 +164,7 @@ try {
     $signatureRoundTrip = $signatureUrl.Replace('-', '+').Replace('_', '/')
     while (($signatureRoundTrip.Length % 4) -ne 0) { $signatureRoundTrip += '=' }
     [IO.File]::WriteAllBytes($signatureBytesPath, [Convert]::FromBase64String($signatureRoundTrip))
-    $roundTripVerify = & aws kms verify --profile $AwsProfile --region $AwsRegion --key-id $keyId --message "fileb://$messagePath" --message-type RAW --signature "fileb://$signatureBytesPath" --signing-algorithm $SigningAlgorithm --query SignatureValid --output text
+    $roundTripVerify = & aws @awsGlobalArgs kms verify --key-id $keyId --message "fileb://$messagePath" --message-type RAW --signature "fileb://$signatureBytesPath" --signing-algorithm $SigningAlgorithm --query SignatureValid --output text
     if ($LASTEXITCODE -ne 0 -or $roundTripVerify.Trim() -ne 'True') {
         throw "Base64url signature round-trip verification failed: $($roundTripVerify.Trim())"
     }
@@ -205,7 +210,7 @@ try {
 	$negativeSignaturePath = Join-Path $temporaryDirectory 'negative-signature.b64'
 	$negativeSignatureBytesPath = Join-Path $temporaryDirectory 'negative-signature.bin'
 	[IO.File]::WriteAllBytes($negativeMessagePath, [Text.Encoding]::UTF8.GetBytes($negativeMessage))
-	& aws kms sign --profile $AwsProfile --region $AwsRegion --key-id $keyId --message "fileb://$negativeMessagePath" --message-type RAW --signing-algorithm $SigningAlgorithm --query Signature --output text | Out-File -Encoding ascii -NoNewline $negativeSignaturePath
+	& aws @awsGlobalArgs kms sign --key-id $keyId --message "fileb://$negativeMessagePath" --message-type RAW --signing-algorithm $SigningAlgorithm --query Signature --output text | Out-File -Encoding ascii -NoNewline $negativeSignaturePath
 	if ($LASTEXITCODE -ne 0) { throw 'AWS KMS negative-test sign command failed.' }
 	$negativeSignatureB64 = (Get-Content -Raw $negativeSignaturePath).Trim()
 	$negativeSignatureBytes = [Convert]::FromBase64String($negativeSignatureB64)
@@ -230,7 +235,8 @@ try {
 		assertion = $bindingAssertion
 		} 422 'ATTESTATION_KMS_SIGNATURE_INVALID' | Out-Null
 
-	Write-Output 'PASS: live KMS-to-API attestation succeeded; durable state, replay protection, altered-signature rejection, and request binding passed.'
+	Write-Output 'PASS: live AWS KMS-to-API integration succeeded using synthetic session metadata; durable state, replay protection, altered-signature rejection, and request binding passed.'
+	Write-Output 'LIMITATION: this is not genuine device attestation, provider token acceptance, APDU transport, or card acceptance.'
 }
 finally {
     if (Test-Path $temporaryDirectory) {

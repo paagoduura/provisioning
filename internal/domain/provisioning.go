@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"time"
@@ -32,6 +33,20 @@ var ErrWebhookEventConflict = errors.New("webhook event identifier was reused wi
 var ErrTokenRequestInProgress = errors.New("token request is already in progress")
 var ErrTokenRequestOutcomeUnknown = errors.New("token request outcome is unknown and requires reconciliation")
 var ErrTokenRequestConflict = errors.New("token request provider reference conflicts with the recorded operation")
+var ErrIdempotencyConflict = errors.New("idempotency key conflicts with an existing request")
+
+// IdempotencyFingerprintsMatch compares only valid SHA-256 fingerprints.
+// Two absent fingerprints are accepted for direct legacy repository fixtures;
+// a legacy row can never match a new request carrying a fingerprint.
+func IdempotencyFingerprintsMatch(existing, incoming []byte) bool {
+	if len(existing) == 0 && len(incoming) == 0 {
+		return true
+	}
+	if len(existing) != 32 || len(incoming) != 32 {
+		return false
+	}
+	return subtle.ConstantTimeCompare(existing, incoming) == 1
+}
 
 // TokenWebhookEvent is the verified, provider-originated event used to advance
 // a session. Repositories persist its identity atomically with the transition.
@@ -86,22 +101,23 @@ var transitions = map[ProvisioningState]map[ProvisioningState]bool{
 }
 
 type ProvisioningSession struct {
-	ID             string            `json:"id"`
-	IdempotencyKey string            `json:"-"`
-	UserID         string            `json:"user_id"`
-	DeviceID       string            `json:"device_id,omitempty"`
-	DeviceUID      string            `json:"device_uid"`
-	DeviceModel    string            `json:"device_model"`
-	Transport      string            `json:"transport"`
-	State          ProvisioningState `json:"state"`
-	Version        int64             `json:"version"`
-	Correlation    string            `json:"correlation_id"`
-	CreatedAt      time.Time         `json:"created_at"`
-	ExpiresAt      time.Time         `json:"expires_at"`
-	FailureCode    string            `json:"failure_code,omitempty"`
-	TokenReference string            `json:"-"`
-	WrappedPayload string            `json:"-"`
-	APDUReceipt    string            `json:"-"`
+	ID                 string            `json:"id"`
+	IdempotencyKey     string            `json:"-"`
+	RequestFingerprint []byte            `json:"-"`
+	UserID             string            `json:"user_id"`
+	DeviceID           string            `json:"device_id,omitempty"`
+	DeviceUID          string            `json:"device_uid"`
+	DeviceModel        string            `json:"device_model"`
+	Transport          string            `json:"transport"`
+	State              ProvisioningState `json:"state"`
+	Version            int64             `json:"version"`
+	Correlation        string            `json:"correlation_id"`
+	CreatedAt          time.Time         `json:"created_at"`
+	ExpiresAt          time.Time         `json:"expires_at"`
+	FailureCode        string            `json:"failure_code,omitempty"`
+	TokenReference     string            `json:"-"`
+	WrappedPayload     string            `json:"-"`
+	APDUReceipt        string            `json:"-"`
 }
 
 func (s *ProvisioningSession) Transition(next ProvisioningState) error {

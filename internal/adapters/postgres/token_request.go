@@ -13,7 +13,7 @@ import (
 
 var errTokenRequestOperationMissing = errors.New("token request operation is missing")
 
-const sessionSelectForUpdate = `SELECT id, idempotency_key, user_id, COALESCE(device_id, ''), device_uid_hash, device_model, transport, state, version, correlation_id, created_at, expires_at, COALESCE(failure_code, ''), COALESCE(token_reference, ''), COALESCE(wrapped_payload, ''), COALESCE(apdu_receipt, '') FROM provisioning_sessions WHERE id = $1 FOR UPDATE`
+const sessionSelectForUpdate = `SELECT id, idempotency_key, user_id, COALESCE(device_id, ''), device_uid_hash, device_model, transport, state, version, correlation_id, created_at, expires_at, COALESCE(failure_code, ''), COALESCE(token_reference, ''), COALESCE(wrapped_payload, ''), COALESCE(apdu_receipt, ''), COALESCE(request_fingerprint, ''::bytea) FROM provisioning_sessions WHERE id = $1 FOR UPDATE`
 
 func (r *SessionRepository) ClaimTokenRequest(ctx context.Context, sessionID string, now time.Time) (domain.TokenRequestClaim, error) {
 	tx, err := r.pool.Begin(ctx)

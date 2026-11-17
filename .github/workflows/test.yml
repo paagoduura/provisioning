@@ -1,31 +1,61 @@
-name: tests
+name: CI and release security
 
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   unit:
-    name: Unit tests, race detector, and vet
-    runs-on: ubuntu-latest
+    name: Go tests, dependency validation, and vulnerability scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up the pinned Go toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
-      - run: go test -race -count=1 ./...
-      - run: go vet ./...
+          cache-dependency-path: go.sum
+      - name: Lint GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
+      - name: Verify module checksums
+        run: go mod verify
+      - name: Verify module graph is tidy
+        run: go mod tidy -diff
+      - name: Validate PostgreSQL backup rehearsal script syntax
+        run: bash -n scripts/postgres-backup-rehearsal.sh
+      - name: Check dependencies and standard library for known vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Run unit tests and race detector
+        run: go test -race -count=1 ./...
+      - name: Run static analysis
+        run: go vet ./...
 
   postgres-integration:
-    name: PostgreSQL migrations and persistence integration
-    runs-on: ubuntu-latest
+    name: PostgreSQL 16 migration and persistence integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:dd2bf3ce2dc83a81674cf7f217fcfd8a5009a4b325dda5b843bfee82a06cff6f
         env:
           POSTGRES_USER: provisioning_test
           POSTGRES_PASSWORD: provisioning_test
@@ -40,9 +70,99 @@ jobs:
     env:
       DATABASE_URL: postgres://provisioning_test:provisioning_test@localhost:5432/provisioning_test?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Set up the pinned Go toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
-      - run: make test-integration
+          cache-dependency-path: go.sum
+      - name: Run migrations and real PostgreSQL integration tests
+        run: make test-integration
+
+  container-release:
+    name: Container build, vulnerability scan, SBOM, and immutable artifact
+    needs: [unit, postgres-integration]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      BUILD_VERSION: ${{ github.ref_name }}
+      VCS_REF: ${{ github.sha }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Build the container locally with a commit-only tag
+        env:
+          IMAGE_REF: local/provisioning:${{ github.sha }}
+        run: >-
+          docker buildx build --pull --platform linux/amd64 --load
+          --tag "$IMAGE_REF"
+          --build-arg "BUILD_VERSION=$BUILD_VERSION"
+          --build-arg "VCS_REF=$VCS_REF"
+          .
+      - name: Generate SPDX SBOM from the built image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: local/provisioning:${{ github.sha }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          syft-version: v1.57.1
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Save the exact image archive and build metadata
+        env:
+          IMAGE_REF: local/provisioning:${{ github.sha }}
+          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          docker save "$IMAGE_REF" --output provisioning-image.tar
+          image_id="$(docker image inspect --format='{{.Id}}' "$IMAGE_REF")"
+          image_archive_sha256="$(sha256sum provisioning-image.tar | cut -d ' ' -f 1)"
+          sbom_sha256="$(sha256sum sbom.spdx.json | cut -d ' ' -f 1)"
+          python3 - "$SOURCE_SHA" "$SOURCE_REF" "$IMAGE_REF" "$image_id" "$image_archive_sha256" "$sbom_sha256" "$(go version)" <<'PY'
+          import json, sys
+          keys = ("source_commit", "source_ref", "image_ref", "image_config_digest", "image_archive_sha256", "sbom_sha256", "go_toolchain")
+          with open("release-metadata.json", "w", encoding="utf-8") as f:
+              json.dump(dict(zip(keys, sys.argv[1:])), f, indent=2, sort_keys=True)
+              f.write("\n")
+          PY
+      - name: Scan the built image for high and critical OS/library vulnerabilities
+        id: image_scan
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: local/provisioning:${{ github.sha }}
+          version: v0.76.2
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: 'false'
+          format: json
+          output: trivy-image-results.json
+          exit-code: '1'
+      - name: Upload commit-bound image, SBOM, metadata, and scan report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: provisioning-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            provisioning-image.tar
+            sbom.spdx.json
+            release-metadata.json
+            trivy-image-results.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+          overwrite: false
+      - name: Fail the gate when image scanning found a blocking vulnerability or could not run
+        if: steps.image_scan.outcome != 'success'
+        run: exit 1

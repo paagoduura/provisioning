@@ -69,8 +69,8 @@ func TestMigrationsApplyInOrderAndAreReplayable(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
 		t.Fatalf("read migration ledger: %v", err)
 	}
-	if version != 16 {
-		t.Fatalf("latest migration ledger version = %d, want 16", version)
+	if version != 18 {
+		t.Fatalf("latest migration ledger version = %d, want 18", version)
 	}
 	var recorded int
 	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version BETWEEN 1 AND 15`).Scan(&recorded); err != nil {
@@ -80,11 +80,11 @@ func TestMigrationsApplyInOrderAndAreReplayable(t *testing.T) {
 		t.Fatalf("recorded migration baseline entries = %d, want 15", recorded)
 	}
 	var columns int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'provisioning_sessions' AND column_name IN ('version','token_reference','wrapped_payload','apdu_receipt')`).Scan(&columns); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'provisioning_sessions' AND column_name IN ('version','token_reference','wrapped_payload','apdu_receipt','request_fingerprint')`).Scan(&columns); err != nil {
 		t.Fatal(err)
 	}
-	if columns != 4 {
-		t.Fatalf("migration columns found = %d, want 4", columns)
+	if columns != 5 {
+		t.Fatalf("migration columns found = %d, want 5", columns)
 	}
 }
 

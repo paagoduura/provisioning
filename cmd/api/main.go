@@ -263,18 +263,20 @@ func main() {
 			return attestation.ProviderReady(ctx, verifier)
 		})},
 	}
+	readinessChecks = append(readinessChecks, readiness.Check{Name: "interswitch_adapter_configuration", Required: production, Run: timed("interswitch", "configuration", func(context.Context) error {
+		if tokenWebhook == nil {
+			return errors.New("real interswitch webhook verifier is not configured")
+		}
+		if _, configured := tokenPort.(*interswitch.Client); !configured {
+			return errors.New("real interswitch token client is not configured")
+		}
+		return nil
+	})})
 	if pool != nil {
 		readinessChecks = append(readinessChecks,
 			readiness.Check{Name: "database", Required: true, Run: pool.Ping},
 			readiness.Check{Name: "database_migration", Required: true, Run: func(ctx context.Context) error {
-				var applied bool
-				if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 16)`).Scan(&applied); err != nil {
-					return err
-				}
-				if !applied {
-					return errors.New("required migration 016 is not applied")
-				}
-				return nil
+				return migrations.Verify(ctx, pool)
 			}},
 		)
 	} else {

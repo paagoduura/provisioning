@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/paagoduura/provisioning/internal/registry"
 )
@@ -19,20 +20,10 @@ func NewDeviceRegistry(pool *pgxpool.Pool) *DeviceRegistry { return &DeviceRegis
 
 func (r *DeviceRegistry) EnsureDevice(ctx context.Context, userID, deviceUID, model, transport string, now time.Time) (registry.Device, error) {
 	uidHash := hashDeviceUID(deviceUID)
-	var device registry.Device
-	var state string
-	var revokedAt *time.Time
-	var replacedBy *string
-	err := r.pool.QueryRow(ctx, `SELECT id, user_id, device_model, transport, lifecycle_state, created_at, updated_at, revoked_at, replaced_by_id FROM registered_devices WHERE device_uid_hash = $1`, uidHash).Scan(&device.ID, &device.UserID, &device.DeviceModel, &device.Transport, &state, &device.CreatedAt, &device.UpdatedAt, &revokedAt, &replacedBy)
+	device, err := r.getDeviceByUIDHash(ctx, uidHash, deviceUID)
 	if err == nil {
 		if device.UserID != userID {
 			return registry.Device{}, registry.ErrDeviceAlreadyOwned
-		}
-		device.DeviceUID = deviceUID
-		device.State = registry.LifecycleState(state)
-		device.RevokedAt = revokedAt
-		if replacedBy != nil {
-			device.ReplacedByID = *replacedBy
 		}
 		return device, nil
 	}
@@ -43,11 +34,37 @@ func (r *DeviceRegistry) EnsureDevice(ctx context.Context, userID, deviceUID, mo
 	if err != nil {
 		return registry.Device{}, err
 	}
-	_, err = r.pool.Exec(ctx, `INSERT INTO registered_devices (id, user_id, device_uid_hash, device_model, transport, lifecycle_state, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $7)`, id, userID, uidHash, model, transport, registry.StatePending, now)
+	err = r.pool.QueryRow(ctx, `INSERT INTO registered_devices (id, user_id, device_uid_hash, device_model, transport, lifecycle_state, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $7) ON CONFLICT (device_uid_hash) DO NOTHING RETURNING id`, id, userID, uidHash, model, transport, registry.StatePending, now).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		device, findErr := r.getDeviceByUIDHash(ctx, uidHash, deviceUID)
+		if findErr != nil {
+			return registry.Device{}, fmt.Errorf("resolve concurrent device registration: %w", findErr)
+		}
+		if device.UserID != userID {
+			return registry.Device{}, registry.ErrDeviceAlreadyOwned
+		}
+		return device, nil
+	}
 	if err != nil {
 		return registry.Device{}, fmt.Errorf("register device: %w", err)
 	}
 	return registry.Device{ID: id, UserID: userID, DeviceUID: deviceUID, DeviceModel: model, Transport: transport, State: registry.StatePending, CreatedAt: now, UpdatedAt: now}, nil
+}
+
+func (r *DeviceRegistry) getDeviceByUIDHash(ctx context.Context, uidHash []byte, deviceUID string) (registry.Device, error) {
+	var device registry.Device
+	var state string
+	var replacedBy *string
+	err := r.pool.QueryRow(ctx, `SELECT id, user_id, device_model, transport, lifecycle_state, created_at, updated_at, revoked_at, replaced_by_id FROM registered_devices WHERE device_uid_hash = $1`, uidHash).Scan(&device.ID, &device.UserID, &device.DeviceModel, &device.Transport, &state, &device.CreatedAt, &device.UpdatedAt, &device.RevokedAt, &replacedBy)
+	if err != nil {
+		return registry.Device{}, err
+	}
+	device.DeviceUID = deviceUID
+	device.State = registry.LifecycleState(state)
+	if replacedBy != nil {
+		device.ReplacedByID = *replacedBy
+	}
+	return device, nil
 }
 
 func (r *DeviceRegistry) GetDevice(ctx context.Context, userID, deviceID string) (registry.Device, error) {
@@ -152,6 +169,10 @@ func (r *DeviceRegistry) RegisterAttestation(ctx context.Context, userID, device
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO registered_device_attestations (device_id, provider, key_id, public_key_der, bundle_version, environment, counter, lifecycle_state, registered_at, last_seen_at) VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), $7, $8, $9, $9)`, deviceID, metadata.Provider, metadata.KeyID, metadata.PublicKeyDER, metadata.BundleVersion, metadata.Environment, metadata.Counter, registry.StateActive, now)
 		if err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "registered_device_attestations_provider_key_id_key" {
+				return registry.ErrKeyBoundElsewhere
+			}
 			return fmt.Errorf("insert registered attestation: %w", err)
 		}
 	} else {
@@ -234,27 +255,39 @@ func (r *DeviceRegistry) SetLifecycle(ctx context.Context, userID, deviceID stri
 }
 
 func (r *DeviceRegistry) ReplaceDevice(ctx context.Context, userID, deviceID, newUID, model, transport string, now time.Time) (registry.Device, error) {
-	old, err := r.getOwnedDevice(ctx, userID, deviceID)
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return registry.Device{}, err
+		return registry.Device{}, fmt.Errorf("begin device replacement: %w", err)
 	}
-	if !registry.IsUsable(old.State) {
+	defer func() { _ = tx.Rollback(ctx) }()
+	var owner, state string
+	if err := tx.QueryRow(ctx, `SELECT user_id, lifecycle_state FROM registered_devices WHERE id = $1 FOR UPDATE`, deviceID).Scan(&owner, &state); errors.Is(err, pgx.ErrNoRows) {
+		return registry.Device{}, registry.ErrDeviceNotFound
+	} else if err != nil {
+		return registry.Device{}, fmt.Errorf("lock device for replacement: %w", err)
+	}
+	if owner != userID {
+		return registry.Device{}, registry.ErrDeviceNotFound
+	}
+	if !registry.IsUsable(registry.LifecycleState(state)) {
 		return registry.Device{}, registry.ErrDeviceUnavailable
 	}
-	newDevice, err := r.EnsureDevice(ctx, userID, newUID, model, transport, now)
+	newDevice, err := r.ensureDeviceTx(ctx, tx, userID, newUID, model, transport, now)
 	if err != nil {
 		return registry.Device{}, err
 	}
 	if newDevice.ID == deviceID {
 		return registry.Device{}, registry.ErrReplacementRequired
 	}
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return registry.Device{}, fmt.Errorf("begin device replacement: %w", err)
+	if !registry.IsUsable(newDevice.State) {
+		return registry.Device{}, registry.ErrDeviceUnavailable
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `UPDATE registered_devices SET lifecycle_state = $1, replaced_by_id = $2, updated_at = $3 WHERE id = $4 AND user_id = $5`, registry.StateReplaced, newDevice.ID, now, deviceID, userID); err != nil {
+	command, err := tx.Exec(ctx, `UPDATE registered_devices SET lifecycle_state = $1, replaced_by_id = $2, updated_at = $3 WHERE id = $4 AND user_id = $5 AND lifecycle_state = $6`, registry.StateReplaced, newDevice.ID, now, deviceID, userID, state)
+	if err != nil {
 		return registry.Device{}, fmt.Errorf("replace device: %w", err)
+	}
+	if command.RowsAffected() != 1 {
+		return registry.Device{}, registry.ErrDeviceUnavailable
 	}
 	if _, err := tx.Exec(ctx, `UPDATE registered_device_attestations SET lifecycle_state = $1 WHERE device_id = $2 AND lifecycle_state = $3`, registry.StateReplaced, deviceID, registry.StateActive); err != nil {
 		return registry.Device{}, fmt.Errorf("replace device keys: %w", err)
@@ -263,6 +296,40 @@ func (r *DeviceRegistry) ReplaceDevice(ctx context.Context, userID, deviceID, ne
 		return registry.Device{}, fmt.Errorf("commit device replacement: %w", err)
 	}
 	return newDevice, nil
+}
+
+func (r *DeviceRegistry) ensureDeviceTx(ctx context.Context, tx pgx.Tx, userID, deviceUID, model, transport string, now time.Time) (registry.Device, error) {
+	uidHash := hashDeviceUID(deviceUID)
+	var device registry.Device
+	var state string
+	var replacedBy *string
+	err := tx.QueryRow(ctx, `SELECT id, user_id, device_model, transport, lifecycle_state, created_at, updated_at, revoked_at, replaced_by_id FROM registered_devices WHERE device_uid_hash = $1 FOR UPDATE`, uidHash).Scan(&device.ID, &device.UserID, &device.DeviceModel, &device.Transport, &state, &device.CreatedAt, &device.UpdatedAt, &device.RevokedAt, &replacedBy)
+	if err == nil {
+		if device.UserID != userID {
+			return registry.Device{}, registry.ErrDeviceAlreadyOwned
+		}
+		device.DeviceUID = deviceUID
+		device.State = registry.LifecycleState(state)
+		if replacedBy != nil {
+			device.ReplacedByID = *replacedBy
+		}
+		return device, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return registry.Device{}, fmt.Errorf("find replacement device: %w", err)
+	}
+	id, err := newDeviceID()
+	if err != nil {
+		return registry.Device{}, err
+	}
+	err = tx.QueryRow(ctx, `INSERT INTO registered_devices (id, user_id, device_uid_hash, device_model, transport, lifecycle_state, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $7) ON CONFLICT (device_uid_hash) DO NOTHING RETURNING id`, id, userID, uidHash, model, transport, registry.StatePending, now).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return registry.Device{}, registry.ErrDeviceUnavailable
+	}
+	if err != nil {
+		return registry.Device{}, fmt.Errorf("create replacement device: %w", err)
+	}
+	return registry.Device{ID: id, UserID: userID, DeviceUID: deviceUID, DeviceModel: model, Transport: transport, State: registry.StatePending, CreatedAt: now, UpdatedAt: now}, nil
 }
 
 func (r *DeviceRegistry) getOwnedDevice(ctx context.Context, userID, deviceID string) (registry.Device, error) {

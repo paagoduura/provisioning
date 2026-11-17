@@ -1,0 +1,380 @@
+openapi: 3.1.0
+info:
+  title: Wearable Provisioning Session Stage API
+  version: 1.0.0
+  description: >-
+    HTTP contract for later provisioning session actions. This contract defines
+    authorization, request shape, validation, responses, and error codes only.
+    It does not define the Verve/Interswitch authentication proof, payload
+    encoding, APDU sequence, secure-channel transcript, or device-verification
+    protocol. Those formats require the approved vendor/card profile. Unconfigured
+    stage adapters must fail closed.
+servers:
+  - url: /
+security:
+  - bearerAuth: []
+paths:
+  /v1/provisioning-sessions/{session_id}/authenticate:
+    post:
+      operationId: authenticateProvisioningSession
+      summary: Submit the opaque session-authentication proof
+      description: >-
+        The backend treats proof as opaque input. Its content and validation
+        semantics must be specified by the approved integration profile.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProofRequest'
+      responses:
+        '200':
+          description: Session-authentication stage accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvisioningSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/StateConflict'
+        '410':
+          $ref: '#/components/responses/Expired'
+        '422':
+          $ref: '#/components/responses/StageFailed'
+        '501':
+          $ref: '#/components/responses/StageUnavailable'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/provisioning-sessions/{session_id}/token-request:
+    post:
+      operationId: requestProvisioningToken
+      summary: Request the provider token for the session
+      description: >-
+        The body must be empty. Token issuance is durably claimed and must not be
+        retried blindly after an ambiguous provider outcome. Provider success is
+        reconciled through the separately authenticated provider webhook.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Token request accepted or already resolved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvisioningSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/StateConflict'
+        '410':
+          $ref: '#/components/responses/Expired'
+        '422':
+          $ref: '#/components/responses/StageFailed'
+        '501':
+          $ref: '#/components/responses/StageUnavailable'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/provisioning-sessions/{session_id}/wrap-payload:
+    post:
+      operationId: wrapProvisioningPayload
+      summary: Wrap the provider token for the device
+      description: >-
+        The body must be empty. Payload construction and cryptographic wrapping
+        are performed only by the configured server-side adapter. This route
+        does not accept caller-supplied wrapped payload bytes.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Payload wrapping stage completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvisioningSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/StateConflict'
+        '410':
+          $ref: '#/components/responses/Expired'
+        '422':
+          $ref: '#/components/responses/StageFailed'
+        '501':
+          $ref: '#/components/responses/StageUnavailable'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/provisioning-sessions/{session_id}/transfer-apdu:
+    post:
+      operationId: transferProvisioningAPDU
+      summary: Execute the server-controlled card transfer stage
+      description: >-
+        The body must be empty. The backend selects command data from persisted
+        server-side state and delegates to the configured secure-channel
+        transport. No caller-supplied APDU sequence is accepted. Without a real
+        approved transport, this stage returns STAGE_UNAVAILABLE.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: APDU transfer stage completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvisioningSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/StateConflict'
+        '410':
+          $ref: '#/components/responses/Expired'
+        '422':
+          $ref: '#/components/responses/StageFailed'
+        '501':
+          $ref: '#/components/responses/StageUnavailable'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/provisioning-sessions/{session_id}/verify-device:
+    post:
+      operationId: verifyProvisionedDevice
+      summary: Submit an opaque post-transfer device-verification proof
+      description: >-
+        The backend treats proof as opaque input. Its content, transcript,
+        challenge binding, and acceptance rules must be specified by the
+        approved card/device protocol profile.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProofRequest'
+      responses:
+        '200':
+          description: Device-verification stage accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvisioningSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/StateConflict'
+        '410':
+          $ref: '#/components/responses/Expired'
+        '422':
+          $ref: '#/components/responses/StageFailed'
+        '501':
+          $ref: '#/components/responses/StageUnavailable'
+        '503':
+          $ref: '#/components/responses/Unavailable'
+  /v1/provisioning-sessions/{session_id}/complete:
+    post:
+      operationId: completeProvisioningSession
+      summary: Complete a device-verified session
+      description: The body must be empty; only the state machine determines whether completion is allowed.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Provisioning session completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvisioningSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/StateConflict'
+        '410':
+          $ref: '#/components/responses/Expired'
+        '422':
+          $ref: '#/components/responses/StageFailed'
+  /v1/provisioning-sessions/{session_id}/fail:
+    post:
+      operationId: failProvisioningSession
+      summary: Explicitly fail an eligible provisioning session
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FailureRequest'
+      responses:
+        '200':
+          description: Session marked failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvisioningSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/StateConflict'
+        '410':
+          $ref: '#/components/responses/Expired'
+        '422':
+          $ref: '#/components/responses/StageFailed'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      description: Opaque provisioning session identifier. Access is limited to its authenticated owner.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+  schemas:
+    ProofRequest:
+      type: object
+      additionalProperties: false
+      required: [proof]
+      properties:
+        proof:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          description: Opaque proof. Protocol-specific encoding/semantics are not defined by this API contract.
+    FailureRequest:
+      type: object
+      additionalProperties: false
+      required: [failure_code]
+      properties:
+        failure_code:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: '^[A-Z0-9_]{1,64}$'
+          description: Bounded stable uppercase code; not free-form text or an error detail.
+    ProvisioningSession:
+      type: object
+      required: [id, user_id, device_uid, device_model, transport, state, version, correlation_id, created_at, expires_at]
+      properties:
+        id:
+          type: string
+        user_id:
+          type: string
+        device_id:
+          type: string
+        device_uid:
+          type: string
+        device_model:
+          type: string
+        transport:
+          type: string
+          enum: [ble, nfc]
+        state:
+          type: string
+          enum: [CREATED, DEVICE_DISCOVERED, DEVICE_ATTESTED, SESSION_AUTHENTICATED, TOKEN_REQUESTING, TOKEN_REQUESTED, TOKEN_RECEIVED, PAYLOAD_WRAPPED, APDU_TRANSFER_STARTED, APDU_TRANSFERRED, DEVICE_VERIFIED, COMPLETED, FAILED]
+        version:
+          type: integer
+          minimum: 1
+        correlation_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        failure_code:
+          type: string
+          maxLength: 64
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        failure_code:
+          type: string
+          description: Stable machine-readable code when returned by a stage handler.
+  responses:
+    BadRequest:
+      description: Malformed JSON, invalid proof, unexpected body, or invalid failure code
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Missing or invalid bearer access token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Session not found or belongs to another user; ownership failures are intentionally indistinguishable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    StateConflict:
+      description: Invalid predecessor state, concurrent update, or unresolved token request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Expired:
+      description: Session expired at or after expires_at
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    StageFailed:
+      description: Stage operation rejected; internal provider/device details are not returned
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    StageUnavailable:
+      description: Required real provider, payload, APDU, or verification adapter is not configured
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unavailable:
+      description: Required dependency unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

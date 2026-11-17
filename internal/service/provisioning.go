@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -19,8 +21,6 @@ type Repository interface {
 	Create(context.Context, domain.ProvisioningSession) (domain.ProvisioningSession, bool, error)
 	Get(context.Context, string) (domain.ProvisioningSession, error)
 	Save(context.Context, domain.ProvisioningSession) (domain.ProvisioningSession, error)
-	FindByIdempotencyKey(context.Context, string) (domain.ProvisioningSession, error)
-	SaveIdempotencyKey(context.Context, string, string) error
 	ReceiveTokenWebhook(context.Context, domain.TokenWebhookEvent, time.Time) (domain.ProvisioningSession, bool, error)
 	ClaimTokenRequest(context.Context, string, time.Time) (domain.TokenRequestClaim, error)
 	MarkTokenRequestUnknown(context.Context, string, string, time.Time) (domain.TokenRequestClaim, error)
@@ -84,7 +84,7 @@ func (s *Service) Get(ctx context.Context, id string) (domain.ProvisioningSessio
 	return s.repo.Get(ctx, id)
 }
 func (s *Service) Create(ctx context.Context, input CreateInput, idempotencyKey string) (domain.ProvisioningSession, bool, error) {
-	if idempotencyKey == "" {
+	if strings.TrimSpace(idempotencyKey) == "" || len(idempotencyKey) > 256 || strings.ContainsAny(idempotencyKey, "\r\n") {
 		return domain.ProvisioningSession{}, false, errors.New("idempotency key is required")
 	}
 	if input.UserID == "" || input.DeviceUID == "" || input.DeviceModel == "" || input.Transport == "" {
@@ -96,28 +96,68 @@ func (s *Service) Create(ctx context.Context, input CreateInput, idempotencyKey 
 	if len(input.UserID) > 128 || len(input.DeviceUID) > 256 || len(input.DeviceModel) > 128 {
 		return domain.ProvisioningSession{}, false, errors.New("input field exceeds maximum length")
 	}
+	fingerprint, err := canonicalCreateFingerprint(input)
+	if err != nil {
+		return domain.ProvisioningSession{}, false, fmt.Errorf("fingerprint session creation request: %w", err)
+	}
 	id, err := randomID("ps")
 	if err != nil {
 		return domain.ProvisioningSession{}, false, err
 	}
 	now := s.now()
-	result := domain.ProvisioningSession{ID: id, IdempotencyKey: idempotencyKey, UserID: input.UserID, DeviceUID: input.DeviceUID, DeviceModel: input.DeviceModel, Transport: input.Transport, State: domain.StateCreated, Version: 1, Correlation: id, CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute)}
-	if s.devices != nil {
-		device, registryErr := s.devices.EnsureDevice(ctx, input.UserID, input.DeviceUID, input.DeviceModel, input.Transport, now)
-		if registryErr != nil {
-			return domain.ProvisioningSession{}, false, registryErr
-		}
-		result.DeviceID = device.ID
-	}
+	result := domain.ProvisioningSession{ID: id, IdempotencyKey: idempotencyKey, RequestFingerprint: fingerprint, UserID: input.UserID, DeviceUID: input.DeviceUID, DeviceModel: input.DeviceModel, Transport: input.Transport, State: domain.StateCreated, Version: 1, Correlation: id, CreatedAt: now, ExpiresAt: now.Add(10 * time.Minute)}
 	stored, created, err := s.repo.Create(ctx, result)
 	if err != nil {
 		return domain.ProvisioningSession{}, false, err
 	}
-	if !created {
+	// PostgreSQL persists only a hash of the device UID. The exact request has
+	// already been fingerprint-verified by Create, so echo its UID in this
+	// response without adding the raw value to durable storage.
+	stored.DeviceUID = input.DeviceUID
+	if created {
+		s.record(ctx, audit.Event{SessionID: result.ID, Type: "PROVISIONING_SESSION_CREATED", Result: "SUCCESS", At: now})
+	}
+	if !created && stored.DeviceID != "" {
 		return stored, true, nil
 	}
-	s.record(ctx, audit.Event{SessionID: result.ID, Type: "PROVISIONING_SESSION_CREATED", Result: "SUCCESS", At: now})
-	return result, false, nil
+	if s.devices != nil {
+		device, registryErr := s.devices.EnsureDevice(ctx, input.UserID, input.DeviceUID, input.DeviceModel, input.Transport, now)
+		if registryErr != nil {
+			return stored, !created, registryErr
+		}
+		if stored.DeviceID != device.ID {
+			stored.DeviceID = device.ID
+			updated, saveErr := s.repo.Save(ctx, stored)
+			if saveErr != nil {
+				latest, getErr := s.repo.Get(ctx, stored.ID)
+				if getErr == nil && latest.DeviceID == device.ID {
+					latest.DeviceUID = input.DeviceUID
+					stored = latest
+				} else {
+					return stored, !created, saveErr
+				}
+			} else {
+				stored = updated
+			}
+		}
+	}
+	return stored, !created, nil
+}
+
+func canonicalCreateFingerprint(input CreateInput) ([]byte, error) {
+	canonical := struct {
+		Version     int    `json:"version"`
+		UserID      string `json:"user_id"`
+		DeviceUID   string `json:"device_uid"`
+		DeviceModel string `json:"device_model"`
+		Transport   string `json:"transport"`
+	}{Version: 1, UserID: input.UserID, DeviceUID: input.DeviceUID, DeviceModel: input.DeviceModel, Transport: input.Transport}
+	encoded, err := json.Marshal(canonical)
+	if err != nil {
+		return nil, err
+	}
+	fingerprint := sha256.Sum256(encoded)
+	return fingerprint[:], nil
 }
 func (s *Service) Discover(ctx context.Context, id string) (domain.ProvisioningSession, error) {
 	return s.transition(ctx, id, domain.StateDeviceDiscovered)

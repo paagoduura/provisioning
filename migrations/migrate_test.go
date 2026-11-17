@@ -13,6 +13,8 @@ func TestMigrationVersion(t *testing.T) {
 		{name: "014_interswitch_webhook_events.sql", want: 14},
 		{name: "015_durable_token_request_operations.sql", want: 15},
 		{name: "016_backfill_migration_ledger.sql", want: 16},
+		{name: "017_session_idempotency_fingerprint.sql", want: 17},
+		{name: "018_bounded_retention_purge_indexes.sql", want: 18},
 		{name: "1_init.sql", bad: true},
 		{name: "000_init.sql", bad: true},
 		{name: "abc_init.sql", bad: true},
